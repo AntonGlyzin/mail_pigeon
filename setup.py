@@ -1,0 +1,41 @@
+import os
+from setuptools import setup, find_packages
+
+# Для изменения версии программы 
+# сообщение коммита должно содержать: "feat:" / "fix:".
+VERSION_APP = os.getenv('VERSION_APP')
+
+with open("README.md", "r", encoding="utf-8") as fh:
+    long_description = fh.read()
+
+setup(
+    name='mail_pigeon',
+    version=VERSION_APP,
+    package_data={"": ["LICENSE", ]},
+    packages=find_packages(),
+    install_requires=[
+        'zmq==0.0.0'
+    ],
+    python_requires=">=3.9",
+    author='Антон Глызин',
+    author_email='tosha.glyzin@mail.ru',
+    description='Асинхронная клиент-серверная библиотека с файловой очередью на стороне клиента.',
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    license='MIT',
+    keywords='zmq files queue client server python',
+    classifiers=[
+        'Intended Audience :: Developers',
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Topic :: Software Development :: Libraries",
+    ],
+    project_urls={
+        "Releases": "https://github.com/AntonGlyzin/mail_pigeon/releases",
+        "Github": "https://github.com/AntonGlyzin/mail_pigeon",
+        "Read the docs": "https://mail-pigeon.readthedocs.io"
+    }
+)

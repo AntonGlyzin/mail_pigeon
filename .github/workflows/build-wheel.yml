@@ -1,0 +1,80 @@
+name: Build Wheel Package
+
+
+on:
+  push:
+    branches:
+      - main
+
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version_app: ${{ steps.version.outputs.VERSION_APP }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: Generate New version
+      id: version
+      run: |
+        FIX=$(git log --oneline --grep="fix:" | wc -l)
+        FEAT=$(git log --oneline --grep="feat:" | wc -l)
+        echo "VERSION_APP=1.${FEAT}.${FIX}" >> $GITHUB_OUTPUT
+        echo "VERSION_APP=1.${FEAT}.${FIX}" >> $GITHUB_ENV
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+    
+    - name: Install dependencies
+      run: pip install setuptools wheel twine
+    
+    - name: Build package
+      run: python setup.py bdist_wheel
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist/*.whl
+
+
+  create-release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - uses: actions/download-artifact@v4
+      - name: Create Release
+        run: |
+          export LANG=ru_RU.UTF-8
+          DESC_COMMIT=$(git show --format=%B --no-patch ${{ github.sha }})
+          gh release create "v${{ needs.build.outputs.version_app }}" dist/* \
+          --title "v${{ needs.build.outputs.version_app }}" \
+          --notes "${DESC_COMMIT}" --target ${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+  publish-pypi:
+    needs: [build]
+    environment: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

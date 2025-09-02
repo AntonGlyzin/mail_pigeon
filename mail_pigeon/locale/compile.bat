@@ -1,0 +1,1 @@
+msgfmt -o ./en/LC_MESSAGES/mail_pigeon.mo ./en/LC_MESSAGES/mail_pigeon.po
