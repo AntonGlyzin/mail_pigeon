@@ -14,7 +14,8 @@ setup(
     package_data={"": ["LICENSE", ]},
     packages=find_packages(),
     install_requires=[
-        'zmq==0.0.0'
+        'pyzmq<=27.0.2',
+        'psutil<=7.0.0'
     ],
     python_requires=">=3.9",
     author='Антон Глызин',
