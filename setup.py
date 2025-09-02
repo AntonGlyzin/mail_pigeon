@@ -18,7 +18,6 @@ setup(
     ],
     package_data={
         'mail_pigeon': [
-            "LICENSE",
             'locale/*/*/*.mo',
             'locale/*/*/*.po'
         ]
