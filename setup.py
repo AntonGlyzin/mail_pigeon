@@ -11,12 +11,19 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
     name='mail_pigeon',
     version=VERSION_APP,
-    package_data={"": ["LICENSE", ]},
     packages=find_packages(),
     install_requires=[
         'pyzmq<=27.0.2',
         'psutil<=7.0.0'
     ],
+    package_data={
+        'mail_pigeon': [
+            "LICENSE",
+            'locale/*/*/*.mo',
+            'locale/*/*/*.po'
+        ]
+    },
+    include_package_data=True,
     python_requires=">=3.9",
     author='Антон Глызин',
     author_email='tosha.glyzin@mail.ru',
