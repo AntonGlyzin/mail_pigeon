@@ -36,6 +36,6 @@ setup(
     project_urls={
         "Releases": "https://github.com/AntonGlyzin/mail_pigeon/releases",
         "Github": "https://github.com/AntonGlyzin/mail_pigeon",
-        "Read the docs": "https://mail-pigeon.readthedocs.io"
+        "Read the docs": "https://mail-pigeon.readthedocs.io/ru/stable"
     }
 )
