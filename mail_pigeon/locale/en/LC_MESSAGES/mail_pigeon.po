@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2025-09-01 10:16+0300\n"
+"POT-Creation-Date: 2025-09-27 12:41+0300\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -47,110 +47,136 @@ msgid "Сервер остановлен."
 msgstr "Server stopped."
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_client.py:314
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_client.py:317
 #, python-brace-format
 msgid "{}: Ошибка в главном цикле блока zmq.ZMQError. "
 msgstr "{}: Error in main ZMQError loop. "
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_client.py:319
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_client.py:322
 #, python-brace-format
 msgid "{}: Ошибка в главном цикле получения сообщений. "
 msgstr "{}: Error in main message receiving loop. "
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_client.py:320
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_client.py:344
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_client.py:323
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_client.py:350
 #, python-brace-format
 msgid "Контекст ошибки: {}. "
 msgstr "Error context: {}. "
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_client.py:343
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_client.py:349
 #, python-brace-format
 msgid "{}: Ошибка в цикле отправки сообщений. "
 msgstr "{}: Error in message sending loop. "
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:104
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:103
 #, python-brace-format
 msgid "{}: Не удалось переадресовать сообщение. "
 msgstr "{}: Failed to forward message. "
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:105
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:104
 #, python-brace-format
 msgid "Отправитель: \"{}\". Получатель: \"{}\"."
 msgstr "Sender: \"{}\". Recipient: \"{}\"."
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:108
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:107
 #, python-brace-format
 msgid "{}: ZMQ ошибка при отправки сообщения: {}"
 msgstr "{}: ZMQ error when sending message: {}"
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:110
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:109
 #, python-brace-format
 msgid "{}: Контекст ZMQ завершен при отправки сообщения."
 msgstr "{}: ZMQ context terminated during message sending."
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:112
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:111
 #, python-brace-format
 msgid "{}: Непредвиденная ошибка: {}"
 msgstr "{}: Unexpected error: {}"
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:140
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:139
 #, python-brace-format
 msgid "{}: Непредвиденная ошибка в мониторинге: {}"
 msgstr "{}: Unexpected error in monitoring: {}"
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:160
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:159
 #, python-brace-format
 msgid "{}: ZMQ ошибка '{}' в цикле обработки сообщений."
 msgstr "{}: ZMQ error '{}' in message processing loop."
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:162
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:161
 #, python-brace-format
 msgid "{}: Контекст ZMQ завершен при обработке сообщений."
 msgstr "{}: ZMQ context terminated during message processing."
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:165
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:164
 #, python-brace-format
 msgid "{}: Ошибка в цикле обработке сообщений. "
 msgstr "{}: Error in message processing loop. "
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:166
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:165
 #, python-brace-format
 msgid "Контекст ошибки: \"{}\". "
 msgstr "Error context: \"{}\". "
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:197
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:196
 #, python-brace-format
 msgid "{}: Не удалось отправить обратно сообщение. "
 msgstr "{}: Failed to send message back. "
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:198
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:197
 #, python-brace-format
 msgid "Отправитель: \"{}\"."
 msgstr "Sender: \"{}\"."
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:218
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:223
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:217
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:222
 #, python-brace-format
 msgid "Отправитель: \"{}\". "
 msgstr "Sender: \"{}\". "
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:222
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:221
 #, python-brace-format
 msgid "{}: Не удалось выполнить команду \"{}\". "
 msgstr "{}: Failed to execute command \"{}\". "
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:224
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_server\mail_server.py:223
 #, python-brace-format
 msgid "Контекст ошибки: \"{}\"."
 msgstr "Error context: \"{}\"."
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\queue\files_box.py:56
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\queue\files_box.py:54
 #, python-brace-format
 msgid "Ошибка при удаление файла '{}' из очереди. "
 msgstr "Error deleting file '{}' from queue. "
 
 #: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\queue\files_box.py:57
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\queue\files_box.py:55
 #, python-brace-format
 msgid "Контекст ошибки: {}"
 msgstr "Error context: {}"
 
-
+#: C:\Users\Antonio\Desktop\mail_pigeon\mail_pigeon\mail_client.py:398
+#, python-brace-format
+msgid "{}: Не удалось расшифровать сообщение от '{}'."
+msgstr "{}: The message from '{}' could not be decrypted."

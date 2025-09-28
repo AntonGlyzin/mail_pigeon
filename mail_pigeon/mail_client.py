@@ -8,6 +8,7 @@ from threading import Thread, Event, RLock
 from mail_pigeon.queue import BaseQueue, SimpleBox
 from mail_pigeon.mail_server import MailServer, CommandsCode, MessageCommand                
 from mail_pigeon.exceptions import PortAlreadyOccupied, ServerNotRunning
+from mail_pigeon.security import IEncryptor
 from mail_pigeon.translate import _
 from mail_pigeon import logger
 
@@ -51,7 +52,8 @@ class MailClient(object):
             port_server: int = 5555,
             is_master: Optional[bool] = False,
             out_queue: Optional[BaseQueue] = None,
-            wait_server: bool = True
+            wait_server: bool = True,
+            encryptor: Optional[IEncryptor] = None
         ):
         """
         Args:
@@ -61,12 +63,14 @@ class MailClient(object):
             is_master (Optional[bool], optional): Будет ли этот клиент сервером.
             out_queue (Optional[BaseQueue], optional): Очередь писем на отправку.
             wait_server (bool, optional): Стоит ли ждать включения сервера.
+            encryptor (bool, optional): Шифратор сообщений.
 
         Raises:
             PortAlreadyOccupied: Нельзя создать сервер на занятом порту.
             ServerNotRunning: Сервер не запущен. Если мы решили не ждать запуска сервера.
         """        
         self.class_name = f'{self.__class__.__name__}-{self.number_client}'
+        self._encryptor = encryptor
         self._server = None
         self.name_client = name_client.encode()
         self.host_server = host_server
@@ -96,7 +100,8 @@ class MailClient(object):
         elif is_master is None and not is_use_port:
             self._server = MailServer(self.port_server)
         while wait_server:
-            if self._is_use_port():
+            is_use_port = self._is_use_port()
+            if is_use_port:
                 break
             time.sleep(.1)
         if not self._server and not is_use_port:
@@ -169,14 +174,6 @@ class MailClient(object):
         self._in_queue.done(res[0])
         return Message(**json.loads(res[1]))
     
-    def __del__(self):
-        """
-            Отключиться от сервера и завершить рабооту.
-        """        
-        self._disconnect_message()
-        time.sleep(.1)
-        self.stop()
-    
     def _disconnect_message(self):
         """
             Отправить сообщение на сервер о завершение работы.
@@ -208,7 +205,10 @@ class MailClient(object):
         """
         with self._rlock:
             self._socket.disconnect(f'tcp://{self.host_server}:{self.port_server}')
-            self._in_poll.unregister(self._socket)
+            try:
+                self._in_poll.unregister(self._socket)
+            except ValueError:
+                pass  # Сокет уже удален
             self._socket.close()
             self._context.term()
     
@@ -288,7 +288,7 @@ class MailClient(object):
                     socks = dict(self._in_poll.poll(1000))
                     if  socks.get(self._socket) == zmq.POLLIN:
                         sender, msg = self._socket.recv_multipart()
-                        logger.debug(f'{self.class_name}.recv: {msg}')
+                        logger.debug(f'{self.class_name}.recv: {sender} - {msg}')
                         if sender == MailServer.SERVER_NAME:
                             self._process_server_commands(msg)
                         else:
@@ -336,7 +336,10 @@ class MailClient(object):
                 recipient = recipient.encode()
                 if recipient not in self._clients:
                     continue
-                self._send_message(recipient, res[1].encode())
+                msg = res[1].encode()
+                if self._encryptor:
+                    msg = self._encryptor.encrypt(msg)
+                self._send_message(recipient, msg)
             except Exception as e:
                 logger.error(
                         (_('{}: Ошибка в цикле отправки сообщений. ').format(f'{self.class_name}-Mailer') +
@@ -383,6 +386,14 @@ class MailClient(object):
         Args:
             msg (bytes): Сообщение.
         """
+        if self._encryptor:
+            try:
+                msg = self._encryptor.decrypt(msg)
+            except Exception:
+                logger.error(
+                    _("{}: Не удалось расшифровать сообщение от '{}'.").format(self.class_name, sender.decode())
+                )
+                return None
         data = Message.parse(msg)
         if sender == self.name_client:
             self._clients.remove(data.recipient.encode())
@@ -407,6 +418,8 @@ class MailClient(object):
                     recipient=data.sender,
                     content=''
                 ).to_bytes()
+            if self._encryptor:
+                data = self._encryptor.encrypt(data)
             self._send_message(recipient.encode(), data)
     
     def _kill_process_on_port(self):

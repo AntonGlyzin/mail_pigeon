@@ -234,6 +234,29 @@ class SimpleBox(BaseQueue):
 В этих методах вам не нужно заботиться о конкурентности данных. Просто опишите откуда читать и куда сохранять.
 
 ---
+## Безопасность и изолированность
+
+У библиотеки есть возможность отправлять сообщения в зашифрованном виде. В этом случае с таким клиентом можно будет общаться только при наличие общего пароля.
+
+```python
+from mail_pigeon import MailClient
+from mail_pigeon.security import TypesEncryptors
+
+# app1
+encript1 = TypesEncryptors.HMAC('admin1')
+# этот клиент выступает как сервер переадресаций
+client1 = MailClient('app1', is_master=True, wait_server=True, encryptor=encryptor1)
+
+# app2
+encript2 = TypesEncryptors.HMAC('admin2')
+client2 = MailClient('app2', is_master=False, wait_server=True, encryptor=encryptor2)
+# app3
+client3 = MailClient('app3', is_master=False, wait_server=True, encryptor=encryptor2)
+```
+
+Несмотря на то, что сервер переадресаций находится в `app1`, `app2` и `app3` смогут общаться между собой, а `app1` не сможет с ними общаться. Даже если `app1` получить их сообщения из своего сервера, он не сможет их расшифровать. Так у нас есть изолированность между отдельными группами и безопасное отправления сообщений. 
+
+---
 ## Внешние ссылки
 
 - [Журнал изменений](https://github.com/AntonGlyzin/mail_pigeon/releases)

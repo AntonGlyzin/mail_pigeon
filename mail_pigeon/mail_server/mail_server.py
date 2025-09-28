@@ -66,12 +66,16 @@ class MailServer(BaseMailServer):
         for client in self.clients_names:
             data = MessageCommand(CommandsCode.NOTIFY_STOP_SERVER, b'').to_bytes()
             self.send_message(client, self.SERVER_NAME, data)
+        time.sleep(.1)
         self._is_start.clear()
         self._heartbeat.clear()
         with self._rlock:
             self._clients.clear()
             self._clients_wait_connect.clear()
-            self._poll_in.unregister(self._socket)
+            try:
+                self._poll_in.unregister(self._socket)
+            except ValueError:
+                pass  # Сокет уже удален
             self._socket.close()
             self._context.destroy()
             self._context.term()
@@ -147,9 +151,14 @@ class MailServer(BaseMailServer):
         while self._is_start.is_set():
             try:
                 socks = dict(self._poll_in.poll())
+            except Exception:
+                time.sleep(.1)
+            try:
                 with self._rlock:
                     if socks.get(self._socket) == zmq.POLLIN:
                         data = self._socket.recv_multipart(flags=zmq.DONTWAIT)
+                        if not data:
+                            continue
                         logger.debug(f'{self.class_name}.recv: {data}')
                         self._message_processing(data)
             except zmq.ZMQError as e:
@@ -174,7 +183,9 @@ class MailServer(BaseMailServer):
 
         Returns:
             Optional[bool]: Результат.
-        """        
+        """
+        if len(data) < 3:
+            return False
         sender = data.pop(0)
         recipient = data.pop(0)
         msg = data.pop(0)

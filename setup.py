@@ -14,7 +14,8 @@ setup(
     packages=find_packages(),
     install_requires=[
         'pyzmq<=27.0.2',
-        'psutil<=7.0.0'
+        'psutil<=7.0.0',
+        'cryptography<=46.0.1'
     ],
     package_data={
         'mail_pigeon': [

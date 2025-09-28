@@ -1,5 +1,5 @@
 from settings import logger, BaseTest
-from mail_pigeon import MailClient, TypeMessage, logger as mail_logger
+from mail_pigeon import MailClient, logger as mail_logger
 from mail_pigeon.queue import FilesBox
 import time
 from pathlib import Path
