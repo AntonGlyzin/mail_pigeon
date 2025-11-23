@@ -1,5 +1,5 @@
 from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
 from mail_pigeon.security import IEncryptor
@@ -15,10 +15,10 @@ class HMACEncryptor(IEncryptor):
         super().__init__(secret_word)
         self.salt = b'pigeon'
         self.kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
+            algorithm=SHA256(),
             length=32,
             salt=self.salt,
-            iterations=100000,
+            iterations=1000,
         )
         self.key = base64.urlsafe_b64encode(self.kdf.derive(secret_word.encode()))
         self.cipher = Fernet(self.key)

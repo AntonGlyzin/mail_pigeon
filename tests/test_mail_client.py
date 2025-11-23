@@ -64,7 +64,11 @@ class TestMailClient(BaseTest):
         client2.send('client3', json.dumps(data1), key_response=m1.key)
         time.sleep(.1)
         th_client3.join()
-        
+        logger.info('7. Завершение.')
+        # client1.stop()
+        # client2.stop()
+        # client3.stop()
+        # time.sleep(1)
         logger.info("-------------------------------------------------------")
         
 if __name__ == "__main__":

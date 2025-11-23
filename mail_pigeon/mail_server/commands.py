@@ -1,38 +1,38 @@
+from __future__ import annotations
 import time
-from typing import List, Type
-from dataclasses import dataclass
-from mail_pigeon.mail_server.base import Command, BaseMailServer
+import json
+from typing import Type, Any, TYPE_CHECKING, Union
+from dataclasses import dataclass, asdict
+from mail_pigeon.mail_server.base import Command
 from mail_pigeon.exceptions import CommandCodeNotFound
 
+if TYPE_CHECKING:
+    from mail_pigeon.mail_server import MailServer
 
 @dataclass
 class MessageCommand:
-    code: bytes
-    data: bytes
+    code: str
+    data: Any = None
     
     def to_bytes(self) -> bytes:
-        code = self.code.decode()
-        data = self.data.decode()
-        return f'{code}:{data}'.encode()
+        return json.dumps(asdict(self)).encode()
     
     @classmethod
-    def parse(cls, msg: bytes) -> 'MessageCommand':
-        msg: List[str] = msg.decode().split(':')
-        return cls(msg[0].encode(), msg[1].encode())
+    def parse(cls, msg: Union[bytes, str]) -> MessageCommand:
+        return cls(**json.loads(msg))
 
 
 @dataclass
 class CommandsCode:
-    CONNECT_CLIENT = b'connect' # клиент отправляет команду когда соединяется
-    CONFIRM_CONNECT = b'confirm' # клиент подтверждает соединение
-    DISCONNECT_CLIENT = b'disconnect' # клиент хочет отсоединиться
-    GET_CONNECTED_CLIENTS = b'get_clients' # клиент запрашивает список подключенных клиентов
-    NOTIFY_NEW_CLIENT = b'new_client' # событие от сервера для клиента о новом клиенте
-    NOTIFY_DISCONNECT_CLIENT = b'disconnect_client' # событие от сервера для клиента об ушедшем клиенте
-    NOTIFY_PING_CLIENT = b'ping_client' # событие от сервера для клиента
-    PONG_SERVER = b'pong_server' # pong от клиента для сервера
-    NOTIFY_STOP_SERVER = b'stop_server' # событие от сервера
-    ECHO_SERVER = b'echo_server' # запрос серверу от клиента
+    CONNECT_CLIENT = 'connect' # клиент отправляет команду когда соединяется
+    CONFIRM_CONNECT = 'confirm' # клиент подтверждает соединение
+    DISCONNECT_CLIENT = 'disconnect' # клиент хочет отсоединиться
+    GET_CONNECTED_CLIENTS = 'get_clients' # клиент запрашивает список участников
+    NOTIFY_NEW_CLIENT = 'new_client' # событие от сервера для клиента о новом подключение
+    NOTIFY_DISCONNECT_CLIENT = 'disconnect_client' # событие от сервера для клиента об ушедшем клиенте
+    PING = 'ping' # ping от клиента для сервера
+    PONG = 'pong' # pong от сервера
+    NOTIFY_STOP_SERVER = 'stop_server' # событие от сервера
 
 
 class ConnectClient(Command):
@@ -46,13 +46,10 @@ class ConnectClient(Command):
         """
             Добавляет клиента в список ожидающих 
             пока он не подтвердит свое присутствие.
-        """        
-        if self.client in self.server.clients:
-            return True
-        if self.client not in self.server.clients_wait_connect:
-            self.server.clients_wait_connect.append(self.client)
+        """
+        self.server.add_wait_client(self.client)
         # отдать подключаемому клиенту список участников
-        data = MessageCommand(self.code, str(self.server.clients_names).encode()).to_bytes()
+        data = MessageCommand(self.code, self.server.clients_names).to_bytes()
         self.server.send_message(self.client, self.server.SERVER_NAME, data, True)
 
 
@@ -68,10 +65,9 @@ class ConfirmConnection(Command):
             Подтверждение от клиента, что он присоединился.
             Посылаем оповещение другим клиентам.
         """
-        if self.client in self.server.clients_wait_connect:
-            self.server.clients_wait_connect.remove(self.client)
-        self.server.clients[self.client] = int(time.time())
-        data = MessageCommand(CommandsCode.CONFIRM_CONNECT, b'').to_bytes()
+        self.server.del_wait_client(self.client)
+        self.server.add_client(self.client,  int(time.time()))
+        data = MessageCommand(CommandsCode.CONFIRM_CONNECT).to_bytes()
         self.server.send_message(self.client, self.server.SERVER_NAME, data)
         for client in self.server.clients_names:
             if client == self.client:
@@ -91,10 +87,8 @@ class DisconnectClient(Command):
         """
             Удаляет клиента из списка и посылает уведомление другим участникам.
         """
-        if self.client in self.server.clients_wait_connect:
-            self.server.clients_wait_connect.remove(self.client)
-        if self.client in self.server.clients:
-            self.server.clients.pop(self.client)
+        self.server.del_wait_client(self.client)
+        self.server.del_client(self.client)
         for client in self.server.clients_names:
             if client == self.client:
                 continue
@@ -111,22 +105,18 @@ class GetConnectedClients(Command):
     
     def run(self):
         """
-            Отправляет подключеннуму клиенту список участников.
+            Отправляет подключеному клиенту список участников.
         """
-        data = MessageCommand(
-                self.code, str(self.server.clients_names).encode()
-            ).to_bytes()
-        self.server.send_message(
-            self.client, self.server.SERVER_NAME, data
-        )
+        data = MessageCommand(self.code, self.server.clients_names).to_bytes()
+        self.server.send_message(self.client, self.server.SERVER_NAME, data)
 
 
-class PongServer(Command):
+class PingServer(Command):
     """
-        Pong от клиента.
+        Ping от клиента.
     """ 
     
-    code = CommandsCode.PONG_SERVER
+    code = CommandsCode.PING
     
     def run(self):
         """
@@ -134,46 +124,30 @@ class PongServer(Command):
         """
         for client in self.server.clients_names:
             if client == self.client:
-                self.server.clients[client] = int(time.time())
-
-
-class EchoServer(Command):
-    """
-        Пинг серверу от клиента.
-    """ 
-    
-    code = CommandsCode.ECHO_SERVER
-    
-    def run(self):
-        """
-            Отправить клиенту что сервер работает.
-        """
-        data = MessageCommand(self.code, b'').to_bytes()
+                self.server.add_client(client, int(time.time()))
+        data = MessageCommand(CommandsCode.PONG).to_bytes()
         self.server.send_message(self.client, self.server.SERVER_NAME, data, True)
 
 
 class Commands(object):
     
     CMD = {
-        ConnectClient.code: ConnectClient,
-        ConfirmConnection.code: ConfirmConnection,
-        DisconnectClient.code: DisconnectClient,
-        GetConnectedClients.code: GetConnectedClients,
-        EchoServer.code: EchoServer,
-        PongServer.code: PongServer
+        ConnectClient.code: ConnectClient, # клиент присоединяется
+        ConfirmConnection.code: ConfirmConnection, # клиент подтверждает соединение
+        DisconnectClient.code: DisconnectClient, # клиент отсоединяется
+        GetConnectedClients.code: GetConnectedClients, # клиент запрашивает список участников
+        PingServer.code: PingServer # ping от клиента для сервера
     }
     
-    def __init__(self, server: BaseMailServer):
+    def __init__(self, server: MailServer):
         self._server = server
     
-    def run_command(
-            self, sender: bytes, code: bytes
-        ) -> Type[Command]:
+    def run_command(self, sender: str, code: str) -> Type[Command]:
         """Запуск команды.
 
         Args:
-            sender (bytes): Отправитель.
-            code (bytes): Код.
+            sender (str): Отправитель.
+            code (str): Код.
 
         Raises:
             CommandCodeNotFound: Команда не найдена.
