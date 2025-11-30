@@ -22,13 +22,12 @@ class IQueue(ABC):
         ...
 
     @abstractmethod
-    def put(self, value: str, key: str = None, use_get_key: bool = False) -> str:
+    def put(self, value: str, key: str = None) -> str:
         """Помещяет значение в очередь.
 
         Args:
             value (str): Значение в очередь.
             key (str): Помещает значение в очередь под этим ключом.
-            use_get_key (bool): при получение `.get(key)` будем использовать ключ.
 
         Returns:
             str: Ключ значения.
@@ -41,11 +40,11 @@ class IQueue(ABC):
         Когда очередь пуста, то метод блокируется, если не установлен timeout.
         
         Args:
-            key (str, optional): Ждать значения по ключу. Нужно установить `use_get_key` в put.
+            key (str, optional): Ждать значения по ключу.
             timeout (float, optional): Сколько в секундах ждать результата.
 
         Returns:
-            res (Optional[(Tuple[str, str], optional)]): Ключ и значение, или пусто если есть timeout.
+            Optional[Tuple[str, str]]: Ключ и значение, или пусто если есть timeout.
         """       
         ...
 
@@ -58,39 +57,14 @@ class IQueue(ABC):
         """        
         ...
     
-    @abstractmethod
-    def update(self):
-        """ 
-            Перемещает активные элементы снова 
-            в живую очередь на выполнение _active_q -> _live_q, 
-            потому как истекло время выполнения. Всегда выполняется перед `.get()`
+    def to_queue(self, key: str = ''):
         """
-        ...
-    
-    @abstractmethod
-    def move_active_to_live(self, key: str = '', startswith: bool = False):
-        """
-            Перемещает элемент снова в очередь на обработку.
-            Если `key` пустая строка и активен `startswith`, то перемещает все. Если активен `startswith`
-            и заполнен `key`, то перемещаются ключи в которых есть часть этого ключа.
+            Перемещает элемент снова на отправления.
+            Можно переместить все ключи по части названия в key.
             
             Args:
                 key (str): Ключ.
-                startswith (bool): Переместить ключи которые начинаются на key.
-        """    
-        ...
-    
-    @abstractmethod
-    def move_live_to_active(self, key: str = '', startswith: bool = False):
         """
-            Перемещает элемент в очередь на ожидание по ключу.
-            Если `key` пустая строка и активен `startswith`, то перемещает все. Если активен `startswith`
-            и заполнен `key`, то перемещаются ключи в которых есть часть этого ключа.
-            
-            Args:
-                key (str): Ключ.
-                startswith (bool): Переместить ключи которые начинаются на key.
-        """ 
         ...
     
     @abstractmethod
@@ -105,59 +79,62 @@ class IQueue(ABC):
 
 class BaseQueue(IQueue):
     
-    def __init__(self, timeout_processing: int = None):
-        """
-        Args:
-            timeout_processing (int, optional): Количество секунд в течение которых нужно обработать сообщение,
-                которое было полученно методом .get(), но не удаленно методом .done(key) из очереди. При запоздание 
-                в обработке, сообщение снова окажется в очереди, где его смогут получить другие потоки.
-                Не относится к очереди, в которой ожидают значение по ключу.
-                Если значение None, то из активного списка не будут происходить перемещения обратно.
-        """
-        self._timeout_processing = timeout_processing
-        # очередь live_q содержит элементы которые еще будут обрабатываться
-        self._live_q: List[str] = self._init_live_queue()
-        # очередь active_q содержит элементы которые уже обрабатываются
-        # {<название ключа>:<время когда помещен в очередь>}
-        self._active_q: Dict[str, int] = {}
+    def __init__(self):
+        self._queue: List[str] = self._init_queue() or [] # на отправления
+        self._wait_queue: List[str] = [] # ожидает по ключу
+        self._send_queue: List[str] = [] # отправленные
         self._cond = Condition()
-    
+
     @property
-    def active_keys(self) ->List[str]:
-        """Активные ключи в обработки. От `.get()` до `.done()`
+    def queue_mails(self) ->List[str]:
+        """Сообщения на обработку.
 
         Returns:
-            List[str]: Список ключей в обработке.
-        """        
-        return [*self._active_q.keys()]
+            List[str]: Список ключей.
+        """
+        with self._cond:
+            return list(self._queue)
+
     
     @property
-    def live_keys(self) ->List[str]:
-        """Ожидают получения на обработку.
+    def wait_mails(self) ->List[str]:
+        """Ожидающие сообщения по ключу.
 
         Returns:
-            List[str]: Список ключей в ожидающие получения из очереди.
-        """        
-        return [*self._live_q]
+            List[str]: Список ключей.
+        """
+        with self._cond:
+            return list(self._wait_queue)
+        
+    @property
+    def send_mails(self) ->List[str]:
+        """Отправленые сообщения, но не подтвержденные.
+
+        Returns:
+            List[str]: Список ключей.
+        """
+        with self._cond:
+            return list(self._send_queue)
 
     def clear(self):
         """ Очищение файловой очереди. """        
         with self._cond:
-            for key in self._live_q:
+            for key in self._queue+self._wait_queue+self._send_queue:
                 self._remove_data(key)
-            for key in self._active_q:
-                self._remove_data(key)
-            self._live_q.clear()
-            self._active_q.clear()
+            self._queue.clear()
+            self._wait_queue.clear()
+            self._send_queue.clear()
             
     def size(self) -> int:
-        """Количество элементов во всей очереди.
+        """Количество элементов по всей очереди.
 
         Returns:
             int: Размер очереди.
         """        
         with self._cond:
-            return len(self._live_q) + len(self._active_q)
+            return (len(self._queue)
+                    +len(self._wait_queue)
+                    +len(self._send_queue))
 
     def put(self, value: str, key: str = None, use_get_key: bool = False) -> str:
         """Помещяет значение в очередь.
@@ -165,137 +142,104 @@ class BaseQueue(IQueue):
         Args:
             value (str): Значение в очередь.
             key (str): Помещает значение в очередь под этим ключом.
-            use_get_key (bool): При получение `.get(key)` нужно использовать ключ.
+            use_get_key (bool): Элемент будет добавлен в ожидающую очередь по ключу `.get(key)`. 
 
         Returns:
             str: Ключ значения.
         """        
         with self._cond:
-            key = key or self.gen_key()
-            self._save_data(key, value)
+            local_key = key or self._gen_key()
+            self._save_data(local_key, value)
             if use_get_key:
-                self._active_q.update({key: int(time.time())})
+                self._wait_queue.append(local_key)
             else:
-                self._live_q.append(key)
+                self._queue.append(local_key)
             self._cond.notify_all()
-        return key
+        return local_key
 
     def get(self, key: str = None, timeout: float = None) -> Optional[Tuple[str, str]]:
         """Получает ключ и значение из очереди.
         Когда очередь пуста, то метод блокируется, если не установлен timeout.
         
         Args:
-            key (str, optional): Ждать значения по ключу. Нужно установить `use_get_key` в put.
+            key (str, optional): Ждать значение по ключу.
             timeout (float, optional): Сколько в секундах ждать результата.
 
         Returns:
-            res (Optional[(Tuple[str, str], optional)]): Ключ и значение, или пусто если есть timeout.
+            Optional[Tuple[str, str]]: Ключ и значение, или пусто если есть timeout.
         """
-        self.update()
         with self._cond:
             if not key:
-                while not self._live_q:
+                while not self._queue:
                     self._cond.wait(timeout=timeout)
-                    if timeout and not self._live_q:
+                    if timeout and not self._queue:
                         return None
-                key = self._live_q.pop(0)
-                self._active_q.update({key: int(time.time())})
+                key = self._queue.pop(0)
+                self._send_queue.append(key)
             else:
-                while key not in self._active_q:
+                while key not in self._wait_queue:
                     self._cond.wait(timeout=timeout)
-                    if (key not in self._active_q) and timeout:
+                    if timeout and (key not in self._wait_queue):
                         return None
             content = self._read_data(key)
         return key, content
 
     def done(self, key: str):
-        """Завершает выполнение задачи, удаляя значение с файлом из любой очереди.
+        """Завершает выполнение задачи в ожидающей и отправленной очереди.
 
         Args:
             key (str): Ключ задачи.
         """        
         with self._cond:
-            if key in self._live_q:
-                self._live_q.remove(key)
+            if key in self._wait_queue:
+                self._wait_queue.remove(key)
                 self._remove_data(key)
-            elif key in self._active_q:
-                self._active_q.pop(key)
+            if key in self._send_queue:
+                self._send_queue.remove(key)
                 self._remove_data(key)
             self._cond.notify_all()
-
-    def update(self):
-        """ 
-            Перемещает активные элементы снова 
-            в живую очередь на выполнение _active_q -> _live_q, 
-            потому как истекло время выполнения. Всегда выполняется перед `.get()`
-        """
-        if not self._timeout_processing:
-            return None
-        old_keys = []
-        current = int(time.time())
-        with self._cond:
-            for k, t in self._active_q.items():
-                if (current - t) > self._timeout_processing:
-                    old_keys.append(k)
-            for old_key in old_keys:
-                self._active_q.pop(old_key)
-                self._live_q.append(old_key)
-
-    def move_active_to_live(self, key: str = '', startswith: bool = False):
-        """
-            Перемещает элемент снова в очередь на обработку.
-            Если `key` пустая строка и активен `startswith`, то перемещает все. Если активен `startswith`
-            и заполнен `key`, то перемещаются ключи в которых есть часть этого ключа.
-            
-            Args:
-                key (str): Ключ.
-                startswith (bool): Переместить ключи которые начинаются на key.
-        """        
-        with self._cond:
-            for active_key in self.active_keys:
-                if startswith and active_key.startswith(key):
-                    self._active_q.pop(active_key)
-                    self._live_q.append(active_key)
-                    continue
-                if key == active_key:
-                    self._active_q.pop(key)
-                    self._live_q.append(key)
     
-    def move_live_to_active(self, key: str = '', startswith: bool = False):
+    def to_queue(self, key: str = ''):
         """
-            Перемещает элемент в очередь на ожидание по ключу.
-            Если `key` пустая строка и активен `startswith`, то перемещает все. Если активен `startswith`
-            и заполнен `key`, то перемещаются ключи в которых есть часть этого ключа.
+            Перемещает элемент снова на отправления.
+            Можно переместить все ключи по части название в key.
             
             Args:
                 key (str): Ключ.
-                startswith (bool): Переместить ключи которые начинаются на key.
         """        
         with self._cond:
-            for live_key in self.live_keys:
-                if startswith and live_key.startswith(key):
-                    self._live_q.remove(live_key)
-                    self._active_q.update({ live_key: int(time.time()) })
-                    continue
-                if key == live_key:
-                    self._live_q.remove(live_key)
-                    self._active_q.update({ live_key: int(time.time()) })
+            for sendkey in self._send_queue:
+                if sendkey.startswith(key):
+                    self._send_queue.remove(sendkey)
+                    self._queue.append(sendkey)
 
     def gen_key(self) -> str:
         """Генерация ключа для очереди.
 
         Returns:
             str: Ключ.
-        """        
-        keys = [*self._live_q]
-        keys.extend(list(self._active_q.keys()))
+        """
+        with self._cond:
+            return self._gen_key()
+    
+    def _gen_key(self) -> str:
+        """Генерация ключа для очереди.
+
+        Returns:
+            str: Ключ.
+        """
         while True:
             new_name = uuid.uuid4().hex
-            if new_name not in keys:
-                return new_name
+            if new_name in self._wait_queue:
+                continue
+            if new_name in self._queue:
+                continue
+            if new_name in self._send_queue:
+                continue
+            return new_name
 
     @abstractmethod
-    def _init_live_queue(self) -> List[str]:
+    def _init_queue(self) -> List[str]:
         """Инициализация очереди при создание экземпляра.
 
         Returns:

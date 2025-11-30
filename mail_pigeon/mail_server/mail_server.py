@@ -168,14 +168,17 @@ class MailServer(BaseMailServer):
         self._clients_wait_connect.clear()
         try:
             self._poll_in.unregister(self._socket)
+            self._in_poll = None
         except Exception as e:
             logger.debug(f'{self.class_name}: closing the socket. Error <{e}>.')
         try:
             self._socket.close()
+            self._socket = None
         except Exception as e:
             logger.debug(f'{self.class_name}: closing the socket. Error <{e}>.')
         try:
             self._context.term()
+            self._context = None
         except Exception as e:
             logger.debug(f'{self.class_name}: destroy the socket. Error <{e}>.')
     
@@ -242,23 +245,13 @@ class MailServer(BaseMailServer):
         # если нет получателя, то это команда для сервера
         if not recipient:
             return self._run_commands(sender, msg)
+        # отправляем получателю
         if self.send_message(recipient, sender, msg):
             return True
-        try:
-            # Если такого клиента нет,
-            # то нужно отправить обратно отправителю
-            # с указанием на самого себя.
-            self._socket.send_multipart(
-                [sender, sender, msg], 
-                flags=zmq.NOBLOCK
-            )
-            return True
-        except zmq.ZMQError:
-            logger.error(
-                _('{}: Не удалось отправить обратно сообщение. ').format(self.class_name) +
-                _('Отправитель: "{}".').format(sender)
-            )
-        return False
+        else:
+            # отправляем самомму себе
+            self.send_message(sender, sender, msg)
+            return False
 
     def _run_commands(self, sender: str, code: str) -> Optional[bool]:
         """Запуск команд сервера.

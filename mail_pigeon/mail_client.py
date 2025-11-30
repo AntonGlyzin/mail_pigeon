@@ -4,7 +4,7 @@ from typing import Optional, List, Union
 import json
 import time
 from dataclasses import dataclass, asdict
-from threading import Thread, Event, RLock
+from threading import Thread, Event, RLock, local
 from mail_pigeon.queue import BaseQueue, SimpleBox
 from mail_pigeon.mail_server import MailServer, CommandsCode, MessageCommand                
 from mail_pigeon.exceptions import PortAlreadyOccupied, ServerNotRunning
@@ -23,6 +23,7 @@ class Message(object):
     key: str # ключ сообщения в очереди
     type: str 
     wait_response: bool # является ли запрос ожидающим ответом
+    is_response: bool # является ли это сообщение ответным
     sender: str
     recipient: str
     content: str
@@ -70,13 +71,17 @@ class MailClient(object):
             ServerNotRunning: Сервер не запущен. Если мы решили не ждать запуска сервера.
         """        
         self.class_name = f'{self.__class__.__name__}-{self.number_client}'
-        self._encryptor = encryptor
-        self._server = None
+        self.th_local = local()
         self.name_client = name_client
         self.host_server = host_server
         self.port_server = port_server
         self.is_master = is_master
         self.waitserver = wait_server
+        self._context = None
+        self._socket = None
+        self._in_poll = None
+        self._encryptor = encryptor
+        self._server = None
         self._clients: List[str] = []
         self._out_queue = out_queue or SimpleBox() # очередь для отправки
         self._in_queue = SimpleBox() # очередь для принятия сообщений
@@ -155,42 +160,39 @@ class MailClient(object):
         self._client_connected.set()
         self._destroy_socket()
     
-    def send(
-            self, recipient: str, content: str, 
-            wait: bool = False, timeout: float = None,
-            key_response: str = None
-        ) -> Optional[Message]:
+    def send(self, recipient: str, content: str, wait: bool = False) -> Optional[Message]:
         """Отправляет сообщение в другой клиент.
-        Сообщения могут ожидаться по команде `get()` или `send()`.
 
         Args:
             recipient (str): Получатель.
             content (str): Содержимое.
-            wait (bool, optional): Ожидать ли получения ответа от запроса из команды send().
-            timeout (float, optional): Сколько времени ожидать сообщения.
-            key_response (str, optional): Ключи из запроса. Обработаный ответ на запрос. Обратные сообщения 
-                не блокируются по wait.
+            wait (bool, optional): Ожидать ли получения ответа от запроса.
 
         Returns:
             Optional[Message]: Сообщение или ничего.
         """
-        key = key_response or self._out_queue.gen_key()
+        key = None
+        is_response = False
+        if hasattr(self.th_local, 'key_response'):
+            key = self.th_local.key_response
+            if key:
+                is_response = True
+        key = key or self._out_queue.gen_key()
         data = Message(
-                key=key, 
-                type=TypeMessage.REQUEST,
-                wait_response = True if key_response else False,
-                sender=self.name_client,
-                recipient=recipient,
-                content=content
+                key = key, 
+                type = TypeMessage.REQUEST,
+                wait_response = True if wait else False,
+                is_response = is_response,
+                sender = self.name_client,
+                recipient = recipient,
+                content = content
             ).to_bytes()
         self._out_queue.put(data.decode(), f'{recipient}-{key}')
+        if hasattr(self.th_local, 'key_response'):
+            self.th_local.key_response = None
         if not wait:
             return None
-        if key_response:
-            return None
-        res = self._in_queue.get(f'{recipient}-{key}', timeout)
-        if not res:
-            return None
+        res = self._in_queue.get(f'{recipient}-{key}')
         self._in_queue.done(res[0])
         return Message(**json.loads(res[1]))
     
@@ -208,7 +210,10 @@ class MailClient(object):
         if not res:
             return None
         self._in_queue.done(res[0])
-        return Message(**json.loads(res[1]))
+        msg = Message(**json.loads(res[1]))
+        if msg.wait_response:
+            self.th_local.key_response = msg.key
+        return msg
     
     def __del__(self):
         self._destroy_socket()
@@ -279,14 +284,17 @@ class MailClient(object):
         try:
             self._socket.disconnect(f'tcp://{self.host_server}:{self.port_server}')
             self._in_poll.unregister(self._socket)
+            self._in_poll = None
         except Exception as e:
             logger.debug(f'{self.class_name}: closing the socket. Error <{e}>.')
         try:
             self._socket.close()
+            self._socket = None
         except Exception as e:
             logger.debug(f'{self.class_name}: closing the socket. Error <{e}>.')
         try:
             self._context.term()
+            self._context = None
         except Exception as e:
             logger.debug(f'{self.class_name}: destroy the socket. Error <{e}>.')
         
@@ -368,13 +376,13 @@ class MailClient(object):
                     if self._server:
                         self._server.stop()
                         self._create_server()
-                    self._destroy_socket()
+                    if self._context:
+                        self._destroy_socket()
                     self._create_socket()
                     time.sleep(.1)
                     self.wait_server()
                     logger.debug(f'{self.class_name}: connected server.')
                     self._server_started.set()
-                    self._connect_message()
                     self.last_ping = current_time
                 if MailServer.INTERVAL_HEARTBEAT < int(current_time - self.last_ping):
                     if not self._is_use_port():
@@ -429,7 +437,6 @@ class MailClient(object):
                 if not res:
                     continue
                 recipient, hex = res[0].split('-')
-                recipient = recipient
                 if recipient not in self.clients:
                     continue
                 msg = res[1]
@@ -452,11 +459,10 @@ class MailClient(object):
             msg (bytes): Сообщение.
         """
         msg_cmd = MessageCommand.parse(msg)
-        logger.debug(f'{self.class_name}: command from server <{msg}>.')
         if CommandsCode.NOTIFY_NEW_CLIENT == msg_cmd.code:
             client = msg_cmd.data
             self._add_client(client)
-            self._out_queue.move_active_to_live(f'{client}-', True)
+            self._out_queue.to_queue(f'{client}-')
         elif CommandsCode.NOTIFY_DISCONNECT_CLIENT == msg_cmd.code:
             self._del_client(msg_cmd.data)
         elif CommandsCode.PONG == msg_cmd.code:
@@ -470,7 +476,7 @@ class MailClient(object):
             self._send_message(MailServer.SERVER_NAME, CommandsCode.CONFIRM_CONNECT)
         elif CommandsCode.CONFIRM_CONNECT == msg_cmd.code:
             self._client_connected.set()
-            self._out_queue.move_active_to_live(startswith=True)
+            self._out_queue.to_queue()
     
     def _process_msg_client(self, msg: str, sender: str):
         """Обработка сообщений от клиентов.
@@ -492,24 +498,26 @@ class MailClient(object):
             self._send_message(MailServer.SERVER_NAME, CommandsCode.GET_CONNECTED_CLIENTS)
             return None
         if data.type == TypeMessage.REPLY:
+            # реакция на автоматический ответ, что сообщение доставлено
             self._out_queue.done(f'{data.sender}-{data.key}')
         elif data.type == TypeMessage.REQUEST:
+            # пришло сообщение с другого клиента
             self._in_queue.put(
                     msg, 
                     key=f'{data.sender}-{data.key}', 
-                    use_get_key=data.wait_response
+                    use_get_key=data.is_response
                 )
             recipient = data.sender
-            # автоматический ответ для отправителя,
-            # что его сообщение доставлено.
             data = Message(
                     key=data.key,
                     type=TypeMessage.REPLY,
                     wait_response=False,
+                    is_response=True,
                     sender=self.name_client,
-                    recipient=data.sender,
+                    recipient=recipient,
                     content=''
                 ).to_bytes()
             if self._encryptor:
                 data = self._encryptor.encrypt(data)
+            # отправляем автоматический ответ на пришедшее сообщение
             self._send_message(recipient, data.decode())

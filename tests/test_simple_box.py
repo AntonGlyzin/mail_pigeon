@@ -13,7 +13,7 @@ class TestSimpleBox(BaseTest):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.fb = SimpleBox(timeout_processing=2)
+        cls.fb = SimpleBox()
         
     @classmethod
     def tearDownClass(cls):
@@ -60,12 +60,9 @@ class TestSimpleBox(BaseTest):
         data4 = {'userId': 2, 'id': 4, 'title': 'delectus aut autem', 'completed': True}
         key4 = self.fb.put(json.dumps(data3))
         k4, d4 = self.fb.get()
-        time.sleep(1.5)
-        k5, d5 = self.fb.get(k4)
-        self.assertEqual(k4, k5)
-        time.sleep(1.5)
-        self.fb.done(k5)
-        self.fb.done(k5) # если запоздал в обработке, но захочет удалить
+        self.assertEqual(k4, key4)
+        self.fb.done(key4)
+        self.assertEqual(self.fb.size(), 0)
         logger.info("-------------------------------------------------------")
         
     def test_case_2(self):

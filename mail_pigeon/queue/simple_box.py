@@ -4,18 +4,11 @@ from mail_pigeon.queue import BaseQueue
 
 class SimpleBox(BaseQueue):
     
-    def __init__(self, timeout_processing: int = None):
-        """
-        Args:
-            timeout_processing (int, optional): Количество секунд в течение которых нужно обработать сообщение,
-                которое было полученно методом .get(), но не удаленно методом .done(key) из очереди. При запоздание 
-                в обработке, сообщение снова окажется в очереди, где его смогут получить другие потоки.
-                Если значение None, то из активного списка не будут происходить перемещения обратно.
-        """
-        super().__init__(timeout_processing)
+    def __init__(self):
+        super().__init__()
         self._simple_box = {}
 
-    def _init_live_queue(self) -> List[str]:
+    def _init_queue(self) -> List[str]:
         """Инициализация очереди при создание экземпляра.
 
         Returns:

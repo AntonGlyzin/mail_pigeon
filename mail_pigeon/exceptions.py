@@ -33,14 +33,14 @@ class ServerNotRunning(BaseException):
         
 class ParserNotFound(BaseException):
     
-    def __init__(self, code: bytes):
+    def __init__(self, code: str):
         message = _("Парсер с кодом {} не найден.").format(code)
         super().__init__(message)
         
         
 class CommandCodeNotFound(BaseException):
     
-    def __init__(self, code: bytes):
+    def __init__(self, code: str):
         message = _("Команда с кодом {} не найдена.").format(code)
         super().__init__(message)
         

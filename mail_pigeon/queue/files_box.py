@@ -9,16 +9,10 @@ from mail_pigeon import logger
 
 class FilesBox(BaseQueue):
     
-    def __init__(
-        self, folder="./queue", timeout_processing: int = None
-    ):
+    def __init__(self, folder="./queue"):
         """
         Args:
             folder (str, optional): Путь до директории с очерелью сообщений.
-            timeout_processing (int, optional): Количество секунд в течение которых нужно обработать сообщение,
-                которое было полученно методом .get(), но не удаленно методом .done(key) из очереди. При запоздание 
-                в обработке, сообщение снова окажется в очереди, где его смогут получить другие потоки.
-                Если значение None, то из активного списка не будут происходить перемещения обратно.
 
         Raises:
             CreateErrorFolderBox: Директория не может быть создана. Есть такой файл.
@@ -29,9 +23,9 @@ class FilesBox(BaseQueue):
             self._folder.mkdir(parents=True, exist_ok=True)
         elif not self._folder.is_dir():
             raise CreateErrorFolderBox(self._folder)
-        super().__init__(timeout_processing)
+        super().__init__()
 
-    def _init_live_queue(self) -> List[str]:
+    def _init_queue(self) -> List[str]:
         """Инициализация очереди при создание экземпляра.
 
         Returns:

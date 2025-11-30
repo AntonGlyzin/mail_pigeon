@@ -71,7 +71,7 @@ def app2(encryptor=None):
             continue
         content = json.loads(res.content)
         content['company'] = data[content['id']]['company']
-        client.send('app1', json.dumps(content), key_response=res.key)
+        client.send('app1', json.dumps(content))
     client.stop()
 
 def app3(encryptor=None):
@@ -86,7 +86,7 @@ def app3(encryptor=None):
         if not res:
             continue
         content = json.loads(res.content)
-        print(f'app3. Ответ от app1: {content}')
+        logger.info(f'app3. Ответ от app1: {content}')
         content['address'] = data[content['id']]['address']
         client.send('app4', json.dumps(content))
     client.stop()
@@ -103,7 +103,7 @@ def app4(encryptor=None):
         if not res:
             continue
         content = json.loads(res.content)
-        print(f'app4. Ответ от app3: {content}')
+        logger.info(f'app4. Ответ от app3: {content}')
         content['address']['geo'] = data[content['id']]['address']['geo']
         client.send('app1', json.dumps(content))
     client.stop()
