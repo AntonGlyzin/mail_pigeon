@@ -1,10 +1,10 @@
 from __future__ import annotations
 import zmq
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Dict
 import json
 import time
 from dataclasses import dataclass, asdict
-from threading import Thread, Event, RLock, local
+from threading import Thread, Event, RLock
 from mail_pigeon.queue import BaseQueue, SimpleBox
 from mail_pigeon.mail_server import MailServer, CommandsCode, MessageCommand                
 from mail_pigeon.exceptions import PortAlreadyOccupied, ServerNotRunning
@@ -71,7 +71,6 @@ class MailClient(object):
             ServerNotRunning: Сервер не запущен. Если мы решили не ждать запуска сервера.
         """        
         self.class_name = f'{self.__class__.__name__}-{self.number_client}'
-        self.th_local = local()
         self.name_client = name_client
         self.host_server = host_server
         self.port_server = port_server
@@ -85,6 +84,7 @@ class MailClient(object):
         self._clients: List[str] = []
         self._out_queue = out_queue or SimpleBox() # очередь для отправки
         self._in_queue = SimpleBox() # очередь для принятия сообщений
+        self._waiting_mails: Dict[str, str] = {} # ключи писем для ожидающих клиентов
         self._is_start = Event()
         self._is_start.set()
         self._server_started = Event()
@@ -173,10 +173,9 @@ class MailClient(object):
         """
         key = None
         is_response = False
-        if hasattr(self.th_local, 'key_response'):
-            key = self.th_local.key_response
-            if key:
-                is_response = True
+        if recipient in self._waiting_mails:
+            key = self._waiting_mails[recipient]
+            is_response = True
         key = key or self._out_queue.gen_key()
         data = Message(
                 key = key, 
@@ -188,8 +187,8 @@ class MailClient(object):
                 content = content
             ).to_bytes()
         self._out_queue.put(data.decode(), f'{recipient}-{key}')
-        if hasattr(self.th_local, 'key_response'):
-            self.th_local.key_response = None
+        if recipient in self._waiting_mails:
+            del self._waiting_mails[recipient]
         if not wait:
             return None
         res = self._in_queue.get(f'{recipient}-{key}')
@@ -212,7 +211,7 @@ class MailClient(object):
         self._in_queue.done(res[0])
         msg = Message(**json.loads(res[1]))
         if msg.wait_response:
-            self.th_local.key_response = msg.key
+            self._waiting_mails[msg.sender] = msg.key
         return msg
     
     def __del__(self):

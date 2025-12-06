@@ -121,6 +121,27 @@ while True:
     client.send(recipient=msg.sender, content='world') 
 ```
 
+- Или так приложение `app2` получает запрос, обрабатывает его и посылает ответ с таким же ключом, но при помощи другого потоке.
+```python
+# app2
+# поток 1
+while True:
+    msg = client.get()
+    print('')
+    print(f'key: {msg.key}') # ИД сообщения в очереди у отправителя
+    print(f'sender: {msg.sender}') # из другого приложения
+    print(f'recipient: {msg.recipient}') # здесь название нашего приложения
+    print(f'content: {msg.content}') # контент 'hello'
+    print('===========')
+    # обработка запроса и посылаем на отправку в другой поток
+    
+
+# поток 2
+while True:
+    # Получаем из очереди и отправляем
+    client.send(recipient=msg.sender, content='world') 
+```
+
 ---
 ## Запасной сервер переадресаций
 
