@@ -29,10 +29,17 @@ logger.addHandler(file_handler)
 start = Event()
 start.set()
 
-def app1(encryptor=None):
+def app1(start, encryptor=None):
     q = Path(__file__).parent / 'queue' /'app1'
     f = FilesBox(str(q))
-    client = MailClient('app1', is_master=True, wait_server=True, out_queue=f, encryptor=encryptor)
+    client = MailClient(
+            'app1',
+            is_master=True, 
+            wait_server=True, 
+            out_queue=f, 
+            encryptor=encryptor, 
+            port_server=5588
+        )
     file = Path(__file__).parent / 'data' / 'app1.json'
     txt = file.read_text('utf-8')
     for item in json.loads(txt):
@@ -56,10 +63,17 @@ def app1(encryptor=None):
     file.write_text(json.dumps(app_data), 'utf-8')
     client.stop()
 
-def app2(encryptor=None):
+def app2(start, encryptor=None):
     q = Path(__file__).parent / 'queue' / 'app2'
     f = FilesBox(str(q))
-    client = MailClient('app2', is_master=False, wait_server=True, out_queue=f, encryptor=encryptor)
+    client = MailClient(
+            'app2', 
+            is_master=False, 
+            wait_server=True, 
+            out_queue=f, 
+            encryptor=encryptor, 
+            port_server=5588
+        )
     file = Path(__file__).parent / 'data' / 'app2.json'
     txt = file.read_text('utf-8')
     data = {}
@@ -74,8 +88,14 @@ def app2(encryptor=None):
         client.send('app1', json.dumps(content))
     client.stop()
 
-def app3(encryptor=None):
-    client = MailClient('app3', is_master=False, wait_server=True, encryptor=encryptor)
+def app3(start, encryptor=None):
+    client = MailClient(
+            'app3', 
+            is_master=False, 
+            wait_server=True, 
+            encryptor=encryptor,
+            port_server=5588
+        )
     file = Path(__file__).parent / 'data' / 'app3.json'
     txt = file.read_text('utf-8')
     data = {}
@@ -91,8 +111,14 @@ def app3(encryptor=None):
         client.send('app4', json.dumps(content))
     client.stop()
 
-def app4(encryptor=None):
-    client = MailClient('app4', is_master=False, wait_server=True, encryptor=encryptor)
+def app4(start, encryptor=None):
+    client = MailClient(
+            'app4', 
+            is_master=False, 
+            wait_server=True, 
+            encryptor=encryptor, 
+            port_server=5588
+        )
     file = Path(__file__).parent / 'data' / 'app4.json'
     txt = file.read_text('utf-8')
     data = {}
@@ -131,32 +157,38 @@ if __name__ == "__main__":
     arg = sys.argv[1]
     if int(arg) == 1:
         logger.info('1. Отправка сообщений между процессами.')
-        proc1 = Process(target=app1, daemon=True)
+        proc1 = Process(target=app1, daemon=True, args=(start,))
         proc1.start()
         time.sleep(1)
-        proc2 = Process(target=app2, daemon=True)
+        proc2 = Process(target=app2, daemon=True, args=(start,))
         proc2.start()
-        proc3 = Process(target=app3, daemon=True)
+        proc3 = Process(target=app3, daemon=True, args=(start,))
         proc3.start()
-        proc4 = Process(target=app4, daemon=True)
+        proc4 = Process(target=app4, daemon=True, args=(start,))
         proc4.start()
         proc1.join()
+        proc2.join()
+        proc3.join()
+        proc4.join()
         check()
     
     if int(arg) == 2:
         logger.info('2. Отправка сообщений между процессами в шифрованном виде HMAC.')
         encript = TypesEncryptors.HMAC('admin')
-        proc1 = Process(target=app1, args=(encript,), daemon=True)
+        proc1 = Process(target=app1, args=(start, encript,), daemon=True)
         proc1.start()
         time.sleep(1)
-        proc2 = Process(target=app2, args=(encript,), daemon=True)
+        proc2 = Process(target=app2, args=(start, encript,), daemon=True)
         proc2.start()
         encript2 = TypesEncryptors.HMAC('admin')
-        proc3 = Process(target=app3, args=(encript2,), daemon=True)
+        proc3 = Process(target=app3, args=(start, encript2,), daemon=True)
         proc3.start()
-        proc4 = Process(target=app4, args=(encript2,), daemon=True)
+        proc4 = Process(target=app4, args=(start, encript2,), daemon=True)
         proc4.start()
         proc1.join()
+        proc2.join()
+        proc3.join()
+        proc4.join()
         check()
         
     if int(arg) == 0:

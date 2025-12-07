@@ -1,14 +1,21 @@
 import zmq
+import zmq.asyncio
+import asyncio
+import sys
 import time
 from typing import List, Optional, Dict, Union
-from threading import Thread, Event, RLock
 from mail_pigeon.exceptions import CommandCodeNotFound
-from mail_pigeon.mail_server.commands import Commands, CommandsCode, MessageCommand
+from mail_pigeon.mail_server.commands import CommandsCode, MessageCommand
+from mail_pigeon.async_server.commands import Commands
 from mail_pigeon.translate import _
 from mail_pigeon import logger
 
+if sys.platform == 'win32':
+    # устанавливаем правильную политику event loop для ZMQ
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-class MailServer(object):
+
+class AsyncMailServer(object):
     """ Сервер с переадресацией сообщений. """
     
     INTERVAL_HEARTBEAT = 4
@@ -25,97 +32,90 @@ class MailServer(object):
         self._clients_wait_connect = [] # ожидающие подключения
         self._port = port
         self._commands = Commands(self)
-        self._is_start = Event()
+        self._is_start = asyncio.Event()
         self._is_start.set()
-        self._heartbeat = Event()
+        self._heartbeat = asyncio.Event()
         self._heartbeat.set()
-        self._rlock = RLock()
-        self._context = zmq.Context()
+        self._lock = asyncio.Lock()
+        self._context = zmq.asyncio.Context()
         self._socket = self._context.socket(zmq.ROUTER)
         self._socket.setsockopt(zmq.TCP_KEEPALIVE, 1)
         self._socket.setsockopt(zmq.IMMEDIATE, 1)
         self._socket.bind(f"tcp://*:{self._port}")
-        self._poll_in = zmq.Poller()
+        self._poll_in = zmq.asyncio.Poller()
         self._poll_in.register(self._socket, zmq.POLLIN)
-        self._server = Thread(
-                target=self._run, 
-                name=self.class_name, 
-                daemon=True
+        self._server = asyncio.create_task(
+                coro=self._run(), 
+                name=self.class_name
             )
-        self._server.start()
-        self._server_heartbeat = Thread(
-                target=self._heartbeat_clients, 
-                name=f'{self.class_name}-Heartbeat', 
-                daemon=True
+        self._server_heartbeat = asyncio.create_task(
+                coro=self._heartbeat_clients(), 
+                name=f'{self.class_name}-Heartbeat'
             )
-        self._server_heartbeat.start()
     
-    @property
-    def clients(self) -> Dict[str, int]:
-        with self._rlock:
+    async def clients(self) -> Dict[str, int]:
+        async with self._lock:
             return tuple(self._clients.items())
 
-    @property
-    def clients_names(self) -> List[str]:
-        with self._rlock:
+    async def clients_names(self) -> List[str]:
+        async with self._lock:
             return list(self._clients.keys())
 
-    @property
-    def clients_wait_connect(self) -> List[str]:
-        with self._rlock:
-            return list(self._clients_wait_connect)
+    async def clients_wait_connect(self) -> List[str]:
+        return list(self._clients_wait_connect)
     
-    def add_client(self, client: str, time: int):
+    async def add_client(self, client: str, time: int):
         """Добавление клиента для связи.
 
         Args:
             client (str): Клиент.
             time (int): Время добавление.
         """        
-        with self._rlock:
+        async with self._lock:
             self._clients[client] = time
     
-    def del_client(self, client: str):
+    async def del_client(self, client: str):
         """Удаление клиента.
 
         Args:
             client (str): Клиент.
         """        
-        with self._rlock:
+        async with self._lock:
             if client in self._clients:
                 self._clients.pop(client)
     
-    def add_wait_client(self, client: str):
+    async def add_wait_client(self, client: str):
         """Добавление клиента в комнату ожиданий.
 
         Args:
             client (str): Клиент.
         """        
-        with self._rlock:
+        async with self._lock:
             if client not in self._clients_wait_connect:
                 self._clients_wait_connect.append(client)
     
-    def del_wait_client(self, client: str):
+    async def del_wait_client(self, client: str):
         """Удаление клиента из комнаты ожиданий.
 
         Args:
             client (str): Клиент.
         """        
-        with self._rlock:
+        async with self._lock:
             if client in self._clients_wait_connect:
                 self._clients_wait_connect.remove(client)
 
-    def stop(self):
+    async def stop(self):
         """
             Завершение работы сервера.
         """
-        for client in self.clients_names:
+        names = await self.clients_names()
+        for client in names:
             data = MessageCommand(CommandsCode.NOTIFY_STOP_SERVER).to_bytes()
-            self.send_message(client, self.SERVER_NAME, data)
-        time.sleep(.1)
+            await self.send_message(client, self.SERVER_NAME, data)
+        await asyncio.sleep(.1)
         self._close_socket()
 
-    def send_message(
+    async def send_message(
             self, recipient: Union[str, bytes], sender: Union[str, bytes], 
             msg: Union[str, bytes], is_unknown_recipient: bool = False
         ) -> Optional[bool]:
@@ -131,7 +131,8 @@ class MailServer(object):
             res (Optional[bool]): Результат.
         """        
         try:
-            if not is_unknown_recipient and recipient not in self.clients_names:
+            names = await self.clients_names()
+            if not is_unknown_recipient and recipient not in names:
                 return False
             if isinstance(recipient, str):
                 recipient = recipient.encode()
@@ -139,7 +140,7 @@ class MailServer(object):
                 sender = sender.encode()
             if isinstance(msg, str):
                 msg = msg.encode()
-            self._socket.send_multipart(
+            await self._socket.send_multipart(
                 [recipient, sender, msg], 
                 flags=zmq.NOBLOCK
             )
@@ -185,17 +186,21 @@ class MailServer(object):
         except Exception as e:
             logger.debug(f'{self.class_name}: destroy the socket. Error <{e}>.')
     
-    def _heartbeat_clients(self):
+    async def _heartbeat_clients(self):
         """В случае просроченного понга от клиента, 
         удаляет его из списка и поссылает другим участникам о его уходе.
         """        
         while self._heartbeat.is_set():
             try:
                 current_time = int(time.time())
-                for client, t in self.clients:
+                clients = await self.clients()
+                for client, t in clients:
                     if self.INTERVAL_HEARTBEAT*2 < (current_time - t):
                         code = CommandsCode.DISCONNECT_CLIENT
-                        self._commands.run_command(client, code)
+                        await self._commands.run_command(client, code)
+            except asyncio.CancelledError:
+                logger.debug(f'{self.class_name}: cancelled error is <._heartbeat_clients> method.')
+                break
             except zmq.ZMQError as e:
                 if str(e) == 'not a socket':
                     self._close_socket()
@@ -204,19 +209,22 @@ class MailServer(object):
                         _("{}: Непредвиденная ошибка <{}> в мониторинге.").format(self.class_name, str(e)), 
                         exc_info=True
                     )
-            time.sleep(1)
+            await asyncio.sleep(1)
 
-    def _run(self):
+    async def _run(self):
         """ Главный цикл получения сообщений. """
         while self._is_start.is_set():
             try:
-                socks = dict(self._poll_in.poll())
-                if socks.get(self._socket) == zmq.POLLIN:
-                    data = self._socket.recv_multipart(flags=zmq.DONTWAIT)
+                socks = await self._poll_in.poll()
+                if dict(socks).get(self._socket) == zmq.POLLIN:
+                    data = await self._socket.recv_multipart(flags=zmq.DONTWAIT)
                     if not data:
                         continue
                     logger.debug(f'{self.class_name}: received message <{data}>.')
-                    self._message_processing(data)
+                    await self._message_processing(data)
+            except asyncio.CancelledError:
+                logger.debug(f'{self.class_name}: cancelled error is <._run> method.')
+                break
             except zmq.ZMQError as e:
                 if str(e) == 'not a socket':
                     self._close_socket()
@@ -231,7 +239,7 @@ class MailServer(object):
                         exc_info=True
                     )
 
-    def _message_processing(self, data: List[bytes]) -> Optional[bool]:
+    async def _message_processing(self, data: List[bytes]) -> Optional[bool]:
         """Обработчик сообщений.
 
         Args:
@@ -247,16 +255,18 @@ class MailServer(object):
         msg = data.pop(0).decode()
         # если нет получателя, то это команда для сервера
         if not recipient:
-            return self._run_commands(sender, msg)
+            res = await self._run_commands(sender, msg)
+            return res
         # отправляем получателю
-        if self.send_message(recipient, sender, msg):
+        res = await self.send_message(recipient, sender, msg)
+        if res:
             return True
         else:
             # отправляем самомму себе
-            self.send_message(sender, sender, msg)
+            await self.send_message(sender, sender, msg)
             return False
 
-    def _run_commands(self, sender: str, code: str) -> Optional[bool]:
+    async def _run_commands(self, sender: str, code: str) -> Optional[bool]:
         """Запуск команд сервера.
 
         Args:
@@ -268,7 +278,7 @@ class MailServer(object):
         """        
         try:
             logger.debug(f'{self.class_name}: run command <{code}> for {sender}.')
-            self._commands.run_command(sender, code)
+            await self._commands.run_command(sender, code)
             return True
         except CommandCodeNotFound as e:
             logger.warning(

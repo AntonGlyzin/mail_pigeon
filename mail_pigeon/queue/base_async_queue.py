@@ -1,16 +1,20 @@
 import uuid
 from typing import Optional, List, Tuple
-from threading import Condition
+import asyncio
+from asyncio import Condition
 from abc import ABC, abstractmethod
 
 
-class BaseQueue(ABC):
+class BaseAsyncQueue(ABC):
     
     def __init__(self):
-        self._queue: List[str] = self._init_queue() or [] # на отправления
+        self._queue: List[str] = [] # на отправления
         self._wait_queue: List[str] = [] # ожидает по ключу
         self._send_queue: List[str] = [] # отправленные
         self._cond = Condition()
+    
+    async def init(self):
+        self._queue: List[str] = await self._init_queue()
 
     @property
     def queue_mails(self) ->List[str]:
@@ -39,27 +43,27 @@ class BaseQueue(ABC):
         """
         return list(self._send_queue)
 
-    def clear(self):
+    async def clear(self):
         """ Очищение файловой очереди. """        
-        with self._cond:
+        async with self._cond:
             for key in self._queue+self._wait_queue+self._send_queue:
-                self._remove_data(key)
+                await self._remove_data(key)
             self._queue.clear()
             self._wait_queue.clear()
             self._send_queue.clear()
     
-    def size(self) -> int:
+    async def size(self) -> int:
         """Количество элементов по всей очереди.
 
         Returns:
             int: Размер очереди.
         """        
-        with self._cond:
+        async with self._cond:
             return (len(self._queue)
                     +len(self._wait_queue)
                     +len(self._send_queue))
 
-    def put(self, value: str, key: str = None, use_get_key: bool = False) -> str:
+    async def put(self, value: str, key: str = None, use_get_key: bool = False) -> str:
         """Помещяет значение в очередь.
 
         Args:
@@ -70,9 +74,9 @@ class BaseQueue(ABC):
         Returns:
             str: Ключ значения.
         """        
-        with self._cond:
+        async with self._cond:
             local_key = key or self._gen_key()
-            self._save_data(local_key, value)
+            await self._save_data(local_key, value)
             if use_get_key:
                 self._wait_queue.append(local_key)
             else:
@@ -80,7 +84,7 @@ class BaseQueue(ABC):
             self._cond.notify_all()
         return local_key
 
-    def get(self, key: str = None, timeout: float = None) -> Optional[Tuple[str, str]]:
+    async def get(self, key: str = None, timeout: float = None) -> Optional[Tuple[str, str]]:
         """Получает ключ и значение из очереди.
         Когда очередь пуста, то метод блокируется, если не установлен timeout.
         
@@ -91,38 +95,44 @@ class BaseQueue(ABC):
         Returns:
             Optional[Tuple[str, str]]: Ключ и значение, или пусто если есть timeout.
         """
-        with self._cond:
+        async with self._cond:
             if not key:
                 while not self._queue:
-                    self._cond.wait(timeout=timeout)
+                    try:
+                        await asyncio.wait_for(self._cond.wait(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        pass
                     if timeout and not self._queue:
                         return None
                 key = self._queue.pop(0)
                 self._send_queue.append(key)
             else:
                 while key not in self._wait_queue:
-                    self._cond.wait(timeout=timeout)
+                    try:
+                        await asyncio.wait_for(self._cond.wait(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        pass
                     if timeout and (key not in self._wait_queue):
                         return None
-            content = self._read_data(key)
+            content = await self._read_data(key)
         return key, content
 
-    def done(self, key: str):
+    async def done(self, key: str):
         """Завершает выполнение задачи в ожидающей и отправленной очереди.
 
         Args:
             key (str): Ключ задачи.
         """        
-        with self._cond:
+        async with self._cond:
             if key in self._wait_queue:
                 self._wait_queue.remove(key)
-                self._remove_data(key)
+                await self._remove_data(key)
             if key in self._send_queue:
                 self._send_queue.remove(key)
-                self._remove_data(key)
+                await self._remove_data(key)
             self._cond.notify_all()
     
-    def to_queue(self, key: str = ''):
+    async def to_queue(self, key: str = ''):
         """
             Перемещает элемент снова на отправления.
             Можно переместить все ключи по части название в key.
@@ -130,19 +140,19 @@ class BaseQueue(ABC):
             Args:
                 key (str): Ключ.
         """        
-        with self._cond:
+        async with self._cond:
             for sendkey in self.send_mails:
                 if sendkey.startswith(key):
                     self._send_queue.remove(sendkey)
                     self._queue.append(sendkey)
 
-    def gen_key(self) -> str:
+    async def gen_key(self) -> str:
         """Генерация ключа для очереди.
 
         Returns:
             str: Ключ.
         """
-        with self._cond:
+        async with self._cond:
             return self._gen_key()
     
     def _gen_key(self) -> str:
@@ -162,7 +172,7 @@ class BaseQueue(ABC):
             return new_name
 
     @abstractmethod
-    def _init_queue(self) -> List[str]:
+    async def _init_queue(self) -> List[str]:
         """Инициализация очереди при создание экземпляра.
 
         Returns:
@@ -171,7 +181,7 @@ class BaseQueue(ABC):
         ...
 
     @abstractmethod
-    def _remove_data(self, key: str):
+    async def _remove_data(self, key: str):
         """Удаляет данные одного элемента.
 
         Args:
@@ -180,7 +190,7 @@ class BaseQueue(ABC):
         ...
 
     @abstractmethod
-    def _read_data(self, key: str) -> str:
+    async def _read_data(self, key: str) -> str:
         """Чтение данных по ключу.
 
         Args:
@@ -192,7 +202,7 @@ class BaseQueue(ABC):
         ...
 
     @abstractmethod
-    def _save_data(self, key: str, value: str):
+    async def _save_data(self, key: str, value: str):
         """Сохраняет данные.
 
         Args:

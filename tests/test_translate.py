@@ -15,13 +15,13 @@ class TestTranslate(BaseTest):
         logger.info('1. Проверка класса локализации.')
         Translate._get_local = lambda s: ['en', '']
         t1 = Translate().func_gettext()
-        self.assertEqual(t1('{}: Ошибка в главном цикле блока zmq.ZMQError. '), '{}: Error in main ZMQError loop. ')
+        self.assertEqual(t1('Команда с кодом <{}> не найдена.'), 'Command with code <{}> not found.')
         self.assertEqual(t1('Текст которого нет.'), 'Текст которого нет.')
         
         Translate.instance = None
         Translate._get_local = lambda s: ['ru_RU', '']
         t2 = Translate().func_gettext()
-        self.assertEqual(t2('{}: Ошибка в главном цикле блока zmq.ZMQError. '), '{}: Ошибка в главном цикле блока zmq.ZMQError. ')
+        self.assertEqual(t2('Команда с кодом <{}> не найдена.'), 'Команда с кодом <{}> не найдена.')
         self.assertEqual(t2('Текст которого нет.'), 'Текст которого нет.')
         logger.info("-------------------------------------------------------")
 

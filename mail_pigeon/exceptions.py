@@ -13,38 +13,38 @@ class BaseException(Exception):
 class CreateErrorFolderBox(BaseException):
     
     def __init__(self, folder: str):
-        message = _("Ошибка при создание папки '{}' с очередью писем.").format(folder)
+        message = _("Ошибка при создание папки <{}> с очередью писем.").format(folder)
         super().__init__(message)
 
 
 class PortAlreadyOccupied(BaseException):
     
     def __init__(self, port: int):
-        message = _("Порт '{}' уже занят.").format(port)
+        message = _("Порт <{}> уже занят.").format(port)
         super().__init__(message)
 
 
 class ServerNotRunning(BaseException):
     
     def __init__(self, port: int):
-        message = _("Сервер не запущен по порту '{}'.").format(port)
+        message = _("Сервер не запущен по порту <{}>.").format(port)
         super().__init__(message)
-        
-        
+
+
 class ParserNotFound(BaseException):
     
     def __init__(self, code: str):
-        message = _("Парсер с кодом {} не найден.").format(code)
+        message = _("Парсер с кодом <{}> не найден.").format(code)
         super().__init__(message)
-        
-        
+
+
 class CommandCodeNotFound(BaseException):
     
     def __init__(self, code: str):
-        message = _("Команда с кодом {} не найдена.").format(code)
+        message = _("Команда с кодом <{}> не найдена.").format(code)
         super().__init__(message)
-        
-        
+
+
 class ServerStopped(BaseException):
     
     def __init__(self):
