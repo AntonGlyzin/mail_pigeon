@@ -107,13 +107,17 @@ class AsyncMailClient(object):
         self._client_connected.set()
         self._destroy_socket()
     
-    async def send(self, recipient: str, content: str, wait: bool = False) -> Optional[Message]:
+    async def send(
+            self, recipient: str, content: str, wait: bool = False, 
+            timeout: float = None
+        ) -> Optional[Message]:
         """Отправляет сообщение в другой клиент.
 
         Args:
             recipient (str): Получатель.
             content (str): Содержимое.
             wait (bool, optional): Ожидать ли получения ответа от запроса.
+            timeout (float, optional): Сколько в секундах ждать результата. 
 
         Returns:
             Optional[Message]: Сообщение или ничего.
@@ -139,7 +143,7 @@ class AsyncMailClient(object):
             del self._waiting_mails[recipient]
         if not wait:
             return None
-        res = await self._in_queue.get(f'{recipient}-{key}')
+        res = await self._in_queue.get(f'{recipient}-{key}', timeout=timeout)
         await self._in_queue.done(res[0])
         return Message(**json.loads(res[1]))
     

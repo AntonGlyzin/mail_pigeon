@@ -130,7 +130,7 @@ client.send(recipient='app2', content='hello world')
 ```python
 # app1
 content = 'hello'
-msg = client.send(recipient='app2', content=content, wait=True) 
+msg = client.send(recipient='app2', content=content, wait=True, timeout=3.0) 
 content = f'{content} {msg.content}'
 print(f'key: {msg.key}') # ИД сообщения в очереди у отправителя
 print(f'sender: {msg.sender}') # из другого приложения
@@ -138,6 +138,7 @@ print(f'recipient: {msg.recipient}') # здесь название нашего 
 print(f'content: {content}') # контент 'hello world'
 print('===========')
 ```
+Может быть случай, когда от нас ушло сообщение, но на той стороне клиент выпал с ошибкой. И чтобы не ждать вечно потерянного сообщения, нужно выставить `timeout`.
 
 - Приложение `app2` получает запрос, обрабатывает его и посылает ответ с таким же ключом как в запросе.
 ```python

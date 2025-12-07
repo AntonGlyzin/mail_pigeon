@@ -114,13 +114,17 @@ class MailClient(object):
         self._client_connected.set()
         self._destroy_socket()
     
-    def send(self, recipient: str, content: str, wait: bool = False) -> Optional[Message]:
+    def send(
+            self, recipient: str, 
+            content: str, wait: bool = False, timeout: float = None
+        ) -> Optional[Message]:
         """Отправляет сообщение в другой клиент.
 
         Args:
             recipient (str): Получатель.
             content (str): Содержимое.
             wait (bool, optional): Ожидать ли получения ответа от запроса.
+            timeout (float, optional): Сколько в секундах ждать результата. 
 
         Returns:
             Optional[Message]: Сообщение или ничего.
@@ -145,7 +149,9 @@ class MailClient(object):
             del self._waiting_mails[recipient]
         if not wait:
             return None
-        res = self._in_queue.get(f'{recipient}-{key}')
+        res = self._in_queue.get(f'{recipient}-{key}', timeout=timeout)
+        if not res:
+            return None
         self._in_queue.done(res[0])
         return Message(**json.loads(res[1]))
     
