@@ -111,3 +111,7 @@ msgstr "Error when deleting a <{}> file from the queue."
 #, python-brace-format
 msgid "Контекст ошибки: <{}>"
 msgstr "Error context: <{}>"
+
+#, python-brace-format
+msgid "Ключ сервера не найден: <{}>"
+msgstr "The server key was not found: <{}>"

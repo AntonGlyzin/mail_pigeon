@@ -1,14 +1,17 @@
 import zmq
+import zmq.auth
 import zmq.asyncio
 import asyncio
 import sys
 import time
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Union, Tuple
+from pathlib import Path
+import uuid
 from mail_pigeon.exceptions import CommandCodeNotFound
 from mail_pigeon.mail_server.commands import CommandsCode, MessageCommand
 from mail_pigeon.async_server.commands import Commands
 from mail_pigeon.translate import _
-from mail_pigeon import logger
+from mail_pigeon.utils import logger, Auth
 
 if sys.platform == 'win32':
     # устанавливаем правильную политику event loop для ZMQ
@@ -22,12 +25,15 @@ class AsyncMailServer(object):
     
     SERVER_NAME = '' # должно остаться пустым
     
-    def __init__(self, port: int = 5555):
+    def __init__(self, port: int = 5555, auth: Optional[Auth] = None):
         """
         Args:
             port (int, optional): Открытый порт для клиентов.
-        """        
+            auth (Auth, optional): аутентификация на основе открытого и закрытого ключа.
+        """
+        self.server_id = uuid.uuid4().hex
         self.class_name = self.__class__.__name__
+        self._auth = auth
         self._clients: Dict[str, int] = {} # уже подключенные для получения сообщений
         self._clients_wait_connect = [] # ожидающие подключения
         self._port = port
@@ -38,9 +44,16 @@ class AsyncMailServer(object):
         self._heartbeat.set()
         self._lock = asyncio.Lock()
         self._context = zmq.asyncio.Context()
+        self._lock_socket = asyncio.Lock()
         self._socket = self._context.socket(zmq.ROUTER)
         self._socket.setsockopt(zmq.TCP_KEEPALIVE, 1)
-        self._socket.setsockopt(zmq.IMMEDIATE, 1)
+        self._socket.setsockopt(zmq.IMMEDIATE, 1) # Не буферизовать для неготовых
+        self._socket.setsockopt(zmq.SNDHWM, 100) # Ограничить буфер
+        self._socket.setsockopt(zmq.LINGER, 0) # Не ждать при закрытии
+        if self._auth:
+            self._socket.setsockopt(zmq.CURVE_PUBLICKEY, self._auth.CURVE_PUBLICKEY)
+            self._socket.setsockopt(zmq.CURVE_SECRETKEY, self._auth.CURVE_SECRETKEY)
+            self._socket.setsockopt(zmq.CURVE_SERVER, True)
         self._socket.bind(f"tcp://*:{self._port}")
         self._poll_in = zmq.asyncio.Poller()
         self._poll_in.register(self._socket, zmq.POLLIN)
@@ -140,10 +153,11 @@ class AsyncMailServer(object):
                 sender = sender.encode()
             if isinstance(msg, str):
                 msg = msg.encode()
-            await self._socket.send_multipart(
-                [recipient, sender, msg], 
-                flags=zmq.NOBLOCK
-            )
+            async with self._lock_socket:
+                await self._socket.send_multipart(
+                    [recipient, sender, msg], 
+                    flags=zmq.NOBLOCK
+                )
             return True
         except zmq.Again:
             logger.error(
@@ -160,6 +174,25 @@ class AsyncMailServer(object):
     
     def __del__(self):
         self._close_socket()
+    
+    @classmethod
+    def generate_keys(cls, cert_dir: Optional[Path] = None) -> Optional[Tuple[bytes, bytes]]:
+        """Генерирует пару ключей или выдает существующие из директории.
+
+        Args:
+            cert_dir (Optional[Path], optional): Путь до директории.
+
+        Returns:
+            Optional[Tuple[str, str]]: Пара ключей public_key, secret_key.
+        """        
+        if not cert_dir:
+            return None
+        if not cert_dir.exists():
+            cert_dir.mkdir(exist_ok=True)
+        cert = cert_dir / 'server.key_secret'
+        if not cert.exists():
+            zmq.auth.create_certificates(cert_dir, 'server')
+        return zmq.auth.load_certificate(cert)
     
     def _close_socket(self):
         """ Закрытие сокета. """        
@@ -193,11 +226,13 @@ class AsyncMailServer(object):
         while self._heartbeat.is_set():
             try:
                 current_time = int(time.time())
-                clients = await self.clients()
-                for client, t in clients:
+                lost_clients = []
+                for client, t in self._clients.items():
                     if self.INTERVAL_HEARTBEAT*2 < (current_time - t):
-                        code = CommandsCode.DISCONNECT_CLIENT
-                        await self._commands.run_command(client, code)
+                        lost_clients.append(client)
+                for client in lost_clients:
+                    code = CommandsCode.DISCONNECT_CLIENT
+                    await self._commands.run_command(client, code)
             except asyncio.CancelledError:
                 logger.debug(f'{self.class_name}: cancelled error is <._heartbeat_clients> method.')
                 break
@@ -209,7 +244,7 @@ class AsyncMailServer(object):
                         _("{}: Непредвиденная ошибка <{}> в мониторинге.").format(self.class_name, str(e)), 
                         exc_info=True
                     )
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
     async def _run(self):
         """ Главный цикл получения сообщений. """
@@ -250,9 +285,9 @@ class AsyncMailServer(object):
         """
         if len(data) < 3:
             return False
-        sender = data.pop(0).decode()
-        recipient = data.pop(0).decode()
-        msg = data.pop(0).decode()
+        sender = data[0].decode()
+        recipient = data[1].decode()
+        msg = data[2].decode()
         # если нет получателя, то это команда для сервера
         if not recipient:
             res = await self._run_commands(sender, msg)

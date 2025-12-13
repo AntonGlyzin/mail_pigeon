@@ -115,7 +115,8 @@ class PingServer(Command):
             if client == self.client:
                 await self.server.add_client(client, int(time.time()))
         if self.client not in names:
-            await ConnectClient(self.server, self.client).run()
+            connect = ConnectClient(self.server, self.client)
+            await connect.run()
         data = MessageCommand(CommandsCode.PONG).to_bytes()
         await self.server.send_message(self.client, self.server.SERVER_NAME, data, True)
 

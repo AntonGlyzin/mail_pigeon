@@ -1,11 +1,13 @@
 from __future__ import annotations
 import zmq
+import zmq.auth
 import zmq.asyncio
 import json
 import time
 import asyncio
 import socket
-from typing import Optional, List, Union, Dict
+from pathlib import Path
+from typing import Optional, List, Union, Dict, Tuple
 from asyncio import Event, Lock, create_task
 from mail_pigeon.queue import BaseAsyncQueue, AsyncSimpleBox
 from mail_pigeon.mail_server import CommandsCode, MessageCommand
@@ -13,7 +15,7 @@ from mail_pigeon.async_server import AsyncMailServer
 from mail_pigeon.exceptions import PortAlreadyOccupied
 from mail_pigeon.security import IEncryptor
 from mail_pigeon.translate import _
-from mail_pigeon.utils import logger, TypeMessage, Message
+from mail_pigeon.utils import logger, TypeMessage, Message, Auth
 
 
 class AsyncMailClient(object):
@@ -30,7 +32,8 @@ class AsyncMailClient(object):
             port_server: int = 5555,
             is_master: Optional[bool] = False,
             out_queue: Optional[BaseAsyncQueue] = None,
-            encryptor: Optional[IEncryptor] = None
+            encryptor: Optional[IEncryptor] = None,
+            cert_dir: Optional[Path] = None
         ):
         """
         Args:
@@ -39,18 +42,18 @@ class AsyncMailClient(object):
             port_server (int, optional): Порт подключения. По умолчанию - 5555.
             is_master (Optional[bool], optional): Будет ли этот клиент сервером.
             out_queue (Optional[BaseAsyncQueue], optional): Очередь писем на отправку.
-            encryptor (bool, optional): Шифратор сообщений.
-
-        Raises:
-            PortAlreadyOccupied: Нельзя создать сервер на занятом порту.
-            ServerNotRunning: Сервер не запущен. Если мы решили не ждать запуска сервера.
+            encryptor (bool, optional): Шифрует сообщение до отправки на сервер.
+            cert_dir (str, optional): Путь до сертификата или 
+                до пустой директории для генерации ключа.
         """        
-        self.class_name = f'{self.__class__.__name__}-{self.number_client}'
+        self.class_name = f'{self.__class__.__name__}-{self.number_client}-{name_client}'
         self.name_client = name_client
         self.host_server = host_server
         self.port_server = port_server
         self.is_master = is_master
+        self._cert_dir = cert_dir
         self._context = None
+        self._lock_socket = Lock()
         self._socket = None
         self._in_poll = None
         self._encryptor = encryptor
@@ -172,6 +175,39 @@ class AsyncMailClient(object):
         self._client_connected.set()
         self._destroy_socket()
     
+    def _generate_keys(self, cert_dir: Optional[Path] = None) -> Optional[Tuple[bytes, bytes]]:
+        """Генерирует пару ключей или выдает существующие из директории.
+
+        Args:
+            cert_dir (Optional[Path], optional): Путь до директории.
+
+        Returns:
+            Optional[Tuple[str, str]]: Пара ключей public_key, secret_key.
+        """        
+        if not cert_dir:
+            return None
+        if not cert_dir.exists():
+            cert_dir.mkdir(exist_ok=True)
+        cert = cert_dir / f'{self.name_client}.key_secret'
+        if not cert.exists():
+            zmq.auth.create_certificates(cert_dir, self.name_client)
+        return zmq.auth.load_certificate(cert)
+    
+    def _load_server_key(self) -> bytes:
+        """Возвращает публичный ключ сервера.
+
+        Raises:
+            FileNotFoundError: Нет файла ключа.
+
+        Returns:
+            (bytes): Ключ.
+        """        
+        server_public = self._cert_dir / "server.key"
+        if not server_public.exists():
+            raise FileNotFoundError(_("Ключ сервера не найден: <{}>").format(server_public))
+        key, none = zmq.auth.load_certificate(server_public)
+        return key
+    
     async def _add_client(self, client: str):
         """Добавление клиента в список.
 
@@ -223,12 +259,20 @@ class AsyncMailClient(object):
         """ Отправить сообщение на сервер о присоединение. """        
         await self._send_message(AsyncMailServer.SERVER_NAME, CommandsCode.CONNECT_CLIENT)
 
-    def _create_socket(self):
+    async def _create_socket(self):
         """ Создание сокета. """
         self._context = zmq.asyncio.Context()
         self._socket = self._context.socket(zmq.DEALER)
         self._socket.setsockopt_string(zmq.IDENTITY, self.name_client)
-        self._socket.setsockopt(zmq.IMMEDIATE, 1)
+        self._socket.setsockopt(zmq.IMMEDIATE, 1) # Не буферизовать для неготовых
+        self._socket.setsockopt(zmq.SNDHWM, 100) # Ограничить буфер
+        self._socket.setsockopt(zmq.LINGER, 0) # Не ждать при закрытии
+        keys = await asyncio.to_thread(self._generate_keys, self._cert_dir)
+        if keys:
+            self._socket.setsockopt(zmq.CURVE_PUBLICKEY, keys[0])
+            self._socket.setsockopt(zmq.CURVE_SECRETKEY, keys[1])
+            serv_key = await asyncio.to_thread(self._load_server_key)
+            self._socket.setsockopt(zmq.CURVE_SERVERKEY, serv_key)
         self._socket.connect(f'tcp://{self.host_server}:{self.port_server}')
         self._in_poll = zmq.asyncio.Poller()
         self._in_poll.register(self._socket, zmq.POLLIN)
@@ -270,7 +314,11 @@ class AsyncMailClient(object):
                 return False
             if self.is_master is False:
                 return False
-            self._server = AsyncMailServer(self.port_server)
+            auth = None
+            if self._cert_dir:
+                keys = AsyncMailServer.generate_keys(self._cert_dir)
+                auth = Auth(keys[0], keys[1])
+            self._server = AsyncMailServer(self.port_server, auth)
             return True
         except Exception:
             return False
@@ -289,15 +337,11 @@ class AsyncMailClient(object):
             bool: Результат.
         """        
         try:
-            if not self._server_started.is_set():
-                return False
-            res = await self._socket.poll(100, zmq.POLLOUT)
-            if not res:  # Готов ли сокет к отправке
-                raise zmq.ZMQError
-            await self._socket.send_multipart(
-                    [recipient.encode(), content.encode()], 
-                    flags=zmq.NOBLOCK
-                )
+            async with self._lock_socket:
+                await self._socket.send_multipart(
+                        [recipient.encode(), content.encode()], 
+                        flags=zmq.NOBLOCK
+                    )
             return True
         except zmq.ZMQError:
             return False
@@ -319,27 +363,22 @@ class AsyncMailClient(object):
     async def _ping_server(self) -> bool:
         """ Отправляет пинг на сервер. """
         try:
-            res = await self._socket.poll(100, zmq.POLLOUT)
-            if not res:  # Готов ли сокет к отправке
-                raise zmq.ZMQError
-            await self._socket.send_multipart(
-                    [AsyncMailServer.SERVER_NAME.encode(), CommandsCode.PING.encode()], 
-                    flags=zmq.NOBLOCK
-                )
+            async with self._lock_socket:
+                await self._socket.send_multipart(
+                        [AsyncMailServer.SERVER_NAME.encode(), CommandsCode.PING.encode()], 
+                        flags=zmq.NOBLOCK
+                    )
             return True
         except zmq.ZMQError:
             return False
     
     async def _check_server(self):
-        """Делает пинги на сервер и пересоздает сокет.
-        
-        Если связь прервется, то будет сделано 3 пинга, 
-        а потом на 10 сек. пересоздан сокет.
-        """        
+        """ Делает пинги на сервер и пересоздает сокет. """        
         while self._is_start.is_set():
             try:
                 current_time = int(time.time())
                 if AsyncMailServer.INTERVAL_HEARTBEAT*2 < int(current_time - self.last_ping):
+                    # пересоздание сокета будет на 10 секунде
                     logger.debug(f'{self.class_name}: reconnecting to server...')
                     self._stop_message()
                     await self._clear_clients()
@@ -347,19 +386,21 @@ class AsyncMailClient(object):
                         self._destroy_socket()
                     if self._server:
                         await self._server.stop()
-                    await asyncio.sleep(.1)
+                        await asyncio.sleep(.1)
                     serv = await self._create_server()
                     if serv:
                         logger.debug(f'{self.class_name}: server has been created.')
-                    self._create_socket()
+                    await self._create_socket()
                     await self._ping_server()
-                    self.last_ping = current_time
+                    self.last_ping = int(time.time())
                     self._server_started.set()
                 elif AsyncMailServer.INTERVAL_HEARTBEAT < int(current_time - self.last_ping):
+                    # пинг начнется на 6 секунде
                     ping = await self._ping_server()
                     if not ping:
-                        self.last_ping = 0
                         self._server_started.clear()
+                    else:
+                        self._server_started.set()
             except zmq.ZMQError as e:
                 if 'not a socket' in str(e):
                     self.last_ping = 0
@@ -416,10 +457,7 @@ class AsyncMailClient(object):
                 if self._encryptor:
                     msg = self._encryptor.encrypt(msg.encode())
                     msg = msg.decode()
-                res = await self._send_message(recipient, msg)
-                if not res:
-                    self.last_ping = 0
-                    self._stop_message()
+                await self._send_message(recipient, msg)
             except Exception as e:
                 logger.error(
                         (_('{}: Ошибка в цикле отправки сообщений. ').format(f'{self.class_name}-Mailer') +

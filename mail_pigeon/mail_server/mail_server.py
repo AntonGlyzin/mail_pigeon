@@ -1,11 +1,14 @@
 import zmq
+import  zmq.auth
 import time
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Union, Tuple
 from threading import Thread, Event, RLock
+from pathlib import Path
+import uuid
 from mail_pigeon.exceptions import CommandCodeNotFound
 from mail_pigeon.mail_server.commands import Commands, CommandsCode, MessageCommand
 from mail_pigeon.translate import _
-from mail_pigeon import logger
+from mail_pigeon.utils import logger, Auth
 
 
 class MailServer(object):
@@ -15,12 +18,16 @@ class MailServer(object):
     
     SERVER_NAME = '' # должно остаться пустым
     
-    def __init__(self, port: int = 5555):
+    def __init__(self, port: int = 5555, auth: Optional[Auth] = None):
         """
         Args:
             port (int, optional): Открытый порт для клиентов.
-        """        
+            auth (Auth, optional): аутентификация на основе открытого и закрытого ключа.
+                
+        """
+        self.server_id = uuid.uuid4().hex
         self.class_name = self.__class__.__name__
+        self._auth = auth
         self._clients: Dict[str, int] = {} # уже подключенные для получения сообщений
         self._clients_wait_connect = [] # ожидающие подключения
         self._port = port
@@ -31,9 +38,16 @@ class MailServer(object):
         self._heartbeat.set()
         self._rlock = RLock()
         self._context = zmq.Context()
+        self._rlock_socket = RLock()
         self._socket = self._context.socket(zmq.ROUTER)
         self._socket.setsockopt(zmq.TCP_KEEPALIVE, 1)
-        self._socket.setsockopt(zmq.IMMEDIATE, 1)
+        self._socket.setsockopt(zmq.IMMEDIATE, 1) # Не буферизовать для неготовых
+        self._socket.setsockopt(zmq.SNDHWM, 100) # Ограничить буфер
+        self._socket.setsockopt(zmq.LINGER, 0) # Не ждать при закрытии
+        if self._auth:
+            self._socket.setsockopt(zmq.CURVE_PUBLICKEY, self._auth.CURVE_PUBLICKEY)
+            self._socket.setsockopt(zmq.CURVE_SECRETKEY, self._auth.CURVE_SECRETKEY)
+            self._socket.setsockopt(zmq.CURVE_SERVER, True)
         self._socket.bind(f"tcp://*:{self._port}")
         self._poll_in = zmq.Poller()
         self._poll_in.register(self._socket, zmq.POLLIN)
@@ -139,10 +153,11 @@ class MailServer(object):
                 sender = sender.encode()
             if isinstance(msg, str):
                 msg = msg.encode()
-            self._socket.send_multipart(
-                [recipient, sender, msg], 
-                flags=zmq.NOBLOCK
-            )
+            with self._rlock_socket:
+                self._socket.send_multipart(
+                    [recipient, sender, msg], 
+                    flags=zmq.NOBLOCK
+                )
             return True
         except zmq.Again:
             logger.error(
@@ -159,6 +174,25 @@ class MailServer(object):
     
     def __del__(self):
         self._close_socket()
+    
+    @classmethod
+    def generate_keys(cls, cert_dir: Optional[Path] = None) -> Optional[Tuple[bytes, bytes]]:
+        """Генерирует пару ключей или выдает существующие из директории.
+
+        Args:
+            cert_dir (Optional[Path], optional): Путь до директории.
+
+        Returns:
+            Optional[Tuple[str, str]]: Пара ключей public_key, secret_key.
+        """        
+        if not cert_dir:
+            return None
+        if not cert_dir.exists():
+            cert_dir.mkdir(exist_ok=True)
+        cert = cert_dir / 'server.key_secret'
+        if not cert.exists():
+            zmq.auth.create_certificates(cert_dir, 'server')
+        return zmq.auth.load_certificate(cert)
     
     def _close_socket(self):
         """ Закрытие сокета. """        
@@ -192,10 +226,13 @@ class MailServer(object):
         while self._heartbeat.is_set():
             try:
                 current_time = int(time.time())
-                for client, t in self.clients:
+                lost_clients = []
+                for client, t in self._clients.items():
                     if self.INTERVAL_HEARTBEAT*2 < (current_time - t):
-                        code = CommandsCode.DISCONNECT_CLIENT
-                        self._commands.run_command(client, code)
+                        lost_clients.append(client)
+                for client in lost_clients:
+                    code = CommandsCode.DISCONNECT_CLIENT
+                    self._commands.run_command(client, code)
             except zmq.ZMQError as e:
                 if str(e) == 'not a socket':
                     self._close_socket()
@@ -204,7 +241,7 @@ class MailServer(object):
                         _("{}: Непредвиденная ошибка <{}> в мониторинге.").format(self.class_name, str(e)), 
                         exc_info=True
                     )
-            time.sleep(1)
+            time.sleep(2)
 
     def _run(self):
         """ Главный цикл получения сообщений. """
@@ -242,9 +279,9 @@ class MailServer(object):
         """
         if len(data) < 3:
             return False
-        sender = data.pop(0).decode()
-        recipient = data.pop(0).decode()
-        msg = data.pop(0).decode()
+        sender = data[0].decode()
+        recipient = data[1].decode()
+        msg = data[2].decode()
         # если нет получателя, то это команда для сервера
         if not recipient:
             return self._run_commands(sender, msg)

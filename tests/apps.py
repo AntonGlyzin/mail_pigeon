@@ -29,7 +29,7 @@ logger.addHandler(file_handler)
 start = Event()
 start.set()
 
-def app1(start, encryptor=None):
+def app1(port, start, encryptor=None, cert_dir=None):
     q = Path(__file__).parent / 'queue' /'app1'
     f = FilesBox(str(q))
     client = MailClient(
@@ -38,11 +38,13 @@ def app1(start, encryptor=None):
             wait_server=True, 
             out_queue=f, 
             encryptor=encryptor, 
-            port_server=5588
+            port_server=port,
+            cert_dir=cert_dir
         )
     file = Path(__file__).parent / 'data' / 'app1.json'
     txt = file.read_text('utf-8')
-    for item in json.loads(txt):
+    data = json.loads(txt)
+    for item in (data*10):
         res = client.send('app2', json.dumps(item), True)
         logger.info(f'app1. Ответ от app2: {res.content}')
         client.send('app3', res.content)
@@ -50,7 +52,7 @@ def app1(start, encryptor=None):
     while True:
         res = client.get(timeout=1)
         logger.info(f'app1. Количество: {len(app_data)}')
-        if len(app_data) == 10:
+        if len(app_data) == 100:
             break
         if not res:
             continue
@@ -63,7 +65,7 @@ def app1(start, encryptor=None):
     file.write_text(json.dumps(app_data), 'utf-8')
     client.stop()
 
-def app2(start, encryptor=None):
+def app2(port, start, encryptor=None, cert_dir=None):
     q = Path(__file__).parent / 'queue' / 'app2'
     f = FilesBox(str(q))
     client = MailClient(
@@ -72,7 +74,8 @@ def app2(start, encryptor=None):
             wait_server=True, 
             out_queue=f, 
             encryptor=encryptor, 
-            port_server=5588
+            port_server=port,
+            cert_dir=cert_dir
         )
     file = Path(__file__).parent / 'data' / 'app2.json'
     txt = file.read_text('utf-8')
@@ -88,13 +91,14 @@ def app2(start, encryptor=None):
         client.send('app1', json.dumps(content))
     client.stop()
 
-def app3(start, encryptor=None):
+def app3(port, start, encryptor=None, cert_dir=None):
     client = MailClient(
             'app3', 
             is_master=False, 
             wait_server=True, 
             encryptor=encryptor,
-            port_server=5588
+            port_server=port,
+            cert_dir=cert_dir
         )
     file = Path(__file__).parent / 'data' / 'app3.json'
     txt = file.read_text('utf-8')
@@ -111,13 +115,14 @@ def app3(start, encryptor=None):
         client.send('app4', json.dumps(content))
     client.stop()
 
-def app4(start, encryptor=None):
+def app4(port, start, encryptor=None, cert_dir=None):
     client = MailClient(
             'app4', 
             is_master=False, 
             wait_server=True, 
             encryptor=encryptor, 
-            port_server=5588
+            port_server=port,
+            cert_dir=cert_dir
         )
     file = Path(__file__).parent / 'data' / 'app4.json'
     txt = file.read_text('utf-8')
@@ -142,12 +147,14 @@ def check():
     file = Path(__file__).parent / 'data' / 'res_app1.json'
     txt = file.read_text('utf-8')
     data = json.loads(txt)
-    if len(data) != 10:
+    if len(data) != 100:
         raise ValueError('Не все данные были записаны в файл.')
     cuurent=0
     for i in data:
         if cuurent < int(i['id']):
             cuurent = int(i['id'])
+        elif int(i['id']) == 1:
+            cuurent = 1
         else:
             raise ValueError('Список данных записан не в последовательном порядке.')
     file.unlink()
@@ -155,49 +162,98 @@ def check():
 
 if __name__ == "__main__":
     arg = sys.argv[1]
+    
+    q = Path(__file__).parent / 'queue'
+    if q.exists():
+        shutil.rmtree(str(q))
+    file = Path(__file__).parent / 'data' / 'res_app1.json'
+    if file.exists():
+        file.unlink()
+    file = Path(__file__).parent / 'apps_cert'
+    if file.exists():
+        shutil.rmtree(str(file))
+    
     if int(arg) == 1:
+        t1 = time.time()
         logger.info('1. Отправка сообщений между процессами.')
-        proc1 = Process(target=app1, daemon=True, args=(start,))
+        proc1 = Process(target=app1, daemon=True, args=(5588, start,))
         proc1.start()
         time.sleep(1)
-        proc2 = Process(target=app2, daemon=True, args=(start,))
+        proc2 = Process(target=app2, daemon=True, args=(5588, start,))
         proc2.start()
-        proc3 = Process(target=app3, daemon=True, args=(start,))
+        proc3 = Process(target=app3, daemon=True, args=(5588, start,))
         proc3.start()
-        proc4 = Process(target=app4, daemon=True, args=(start,))
+        proc4 = Process(target=app4, daemon=True, args=(5588, start,))
         proc4.start()
         proc1.join()
         proc2.join()
         proc3.join()
         proc4.join()
+        logger.info('----Время выполнения: {}'.format(time.time()-t1))
         check()
     
     if int(arg) == 2:
+        t1 = time.time()
         logger.info('2. Отправка сообщений между процессами в шифрованном виде HMAC.')
         encript = TypesEncryptors.HMAC('admin')
-        proc1 = Process(target=app1, args=(start, encript,), daemon=True)
+        proc1 = Process(target=app1, args=(5599, start, encript,), daemon=True)
         proc1.start()
         time.sleep(1)
-        proc2 = Process(target=app2, args=(start, encript,), daemon=True)
+        proc2 = Process(target=app2, args=(5599, start, encript,), daemon=True)
         proc2.start()
         encript2 = TypesEncryptors.HMAC('admin')
-        proc3 = Process(target=app3, args=(start, encript2,), daemon=True)
+        proc3 = Process(target=app3, args=(5599, start, encript2,), daemon=True)
         proc3.start()
-        proc4 = Process(target=app4, args=(start, encript2,), daemon=True)
+        proc4 = Process(target=app4, args=(5599, start, encript2,), daemon=True)
         proc4.start()
         proc1.join()
         proc2.join()
         proc3.join()
         proc4.join()
+        logger.info('----Время выполнения: {}'.format(time.time()-t1))
         check()
-        
-    if int(arg) == 0:
-        q = Path(__file__).parent / 'queue'
-        if q.exists():
-            shutil.rmtree(str(q))
-        file = Path(__file__).parent / 'data' / 'res_app1.json'
-        if file.exists():
-            file.unlink()
+    
+    if int(arg) == 3:
+        t1 = time.time()
+        logger.info('3. Отправка сообщений между процессами с CURVE аутентификацией.')
+        apps_cert = Path(__file__).parent / 'apps_cert'
+        proc1 = Process(target=app1, daemon=True, args=(5600, start,), kwargs={'cert_dir': apps_cert})
+        proc1.start()
+        time.sleep(1)
+        proc2 = Process(target=app2, daemon=True, args=(5600, start,), kwargs={'cert_dir': apps_cert})
+        proc2.start()
+        proc3 = Process(target=app3, daemon=True, args=(5600, start,), kwargs={'cert_dir': apps_cert})
+        proc3.start()
+        proc4 = Process(target=app4, daemon=True, args=(5600, start,), kwargs={'cert_dir': apps_cert})
+        proc4.start()
+        proc1.join()
+        proc2.join()
+        proc3.join()
+        proc4.join()
+        logger.info('----Время выполнения: {}'.format(time.time()-t1))
+        check()
+    
+    if int(arg) == 4:
+        t1 = time.time()
+        logger.info('4. Отправка сообщений между процессами с CURVE аутентификацией и шифрованием сообщений.')
+        apps_cert = Path(__file__).parent / 'apps_cert'
+        encript = TypesEncryptors.HMAC('admin')
+        proc1 = Process(target=app1, daemon=True, args=(5601, start, encript), kwargs={'cert_dir': apps_cert})
+        proc1.start()
+        time.sleep(1)
+        proc2 = Process(target=app2, daemon=True, args=(5601, start, encript), kwargs={'cert_dir': apps_cert})
+        proc2.start()
+        encript2 = TypesEncryptors.HMAC('admin')
+        proc3 = Process(target=app3, daemon=True, args=(5601, start, encript2), kwargs={'cert_dir': apps_cert})
+        proc3.start()
+        proc4 = Process(target=app4, daemon=True, args=(5601, start, encript2), kwargs={'cert_dir': apps_cert})
+        proc4.start()
+        proc1.join()
+        proc2.join()
+        proc3.join()
+        proc4.join()
+        logger.info('----Время выполнения: {}'.format(time.time()-t1))
+    
     logger.info("-------------------------------------------------------")
     logger.info('Тест завершен.')
     sys.exit(0)

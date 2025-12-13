@@ -12,6 +12,12 @@ logging.basicConfig(
 logger = logging.getLogger('mail_pigeon')
 
 
+@dataclass
+class Auth:
+    CURVE_PUBLICKEY: str
+    CURVE_SECRETKEY: str
+
+
 class TypeMessage(object):
     REQUEST = 'request'
     REPLY = 'reply'
