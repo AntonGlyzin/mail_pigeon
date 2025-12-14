@@ -64,9 +64,9 @@ class AsyncMailClient(object):
         self._waiting_mails: Dict[str, str] = {} # ключи писем для ожидающих клиентов
         self._is_start = Event()
         self._is_start.set()
-        self._server_started = Event()
+        self._server_started = Event() # если нужно пересоздать сокет
         self._server_started.clear()
-        self._client_connected = Event()
+        self._client_connected = Event() # сигнал что сервер нас добавил в участники
         self._client_connected.clear()
         self._last_ping = 0
         self._lock = Lock()
@@ -82,6 +82,7 @@ class AsyncMailClient(object):
                 coro=self._check_server(), 
                 name=f'{self.class_name}-Heartbeat-Server'
             )
+        create_task(self._once_start_client())
     
     @property
     def last_ping(self):
@@ -103,8 +104,11 @@ class AsyncMailClient(object):
         """
             Завершение клиента.
         """
+        await self._disconnect_message()
+        await asyncio.sleep(.1)
         if self._server:
             await self._server.stop()
+            await asyncio.sleep(.1)
         self._is_start.clear()
         self._server_started.set()
         self._client_connected.set()
@@ -251,22 +255,30 @@ class AsyncMailClient(object):
         self._server_started.clear()
         self._client_connected.clear()
     
-    async def _disconnect_message(self):
-        """ Отправить сообщение на сервер о завершение работы. """        
-        await self._send_message(AsyncMailServer.SERVER_NAME, CommandsCode.DISCONNECT_CLIENT)
+    async def _disconnect_message(self) -> bool:
+        """ Отправить сообщение на сервер о завершение работы. """
+        res = await self._send_message(AsyncMailServer.SERVER_NAME, CommandsCode.DISCONNECT_CLIENT, True)
+        return res
     
-    async def _connect_message(self):
-        """ Отправить сообщение на сервер о присоединение. """        
-        await self._send_message(AsyncMailServer.SERVER_NAME, CommandsCode.CONNECT_CLIENT)
+    async def _connect_message(self) -> bool:
+        """ Отправить сообщение на сервер о присоединение. """
+        res = await self._send_message(AsyncMailServer.SERVER_NAME, CommandsCode.CONNECT_CLIENT, True)
+        return res
+    
+    async def _once_start_client(self):
+        """ Запуск клиента. """
+        await self._create_server()
+        await self._create_socket()
 
     async def _create_socket(self):
         """ Создание сокета. """
         self._context = zmq.asyncio.Context()
         self._socket = self._context.socket(zmq.DEALER)
         self._socket.setsockopt_string(zmq.IDENTITY, self.name_client)
-        self._socket.setsockopt(zmq.IMMEDIATE, 1) # Не буферизовать для неготовых
-        self._socket.setsockopt(zmq.SNDHWM, 100) # Ограничить буфер
-        self._socket.setsockopt(zmq.LINGER, 0) # Не ждать при закрытии
+        self._socket.setsockopt(zmq.IMMEDIATE, 1) # не буферизовать для неготовых
+        self._socket.setsockopt(zmq.SNDHWM, 1000) # ограничить буфер на отправку
+        self._socket.setsockopt(zmq.LINGER, 100) # сброс через
+        self._socket.setsockopt(zmq.SNDBUF, 65536) # системный буфер
         keys = await asyncio.to_thread(self._generate_keys, self._cert_dir)
         if keys:
             self._socket.setsockopt(zmq.CURVE_PUBLICKEY, keys[0])
@@ -282,6 +294,9 @@ class AsyncMailClient(object):
         try:
             if self._socket:
                 self._socket.disconnect(f'tcp://{self.host_server}:{self.port_server}')
+        except Exception as e:
+            logger.debug(f'{self.class_name}: closing the socket. Error <{e}>.')
+        try:
             if self._in_poll:
                 self._in_poll.unregister(self._socket)
             self._in_poll = None
@@ -319,32 +334,43 @@ class AsyncMailClient(object):
                 keys = AsyncMailServer.generate_keys(self._cert_dir)
                 auth = Auth(keys[0], keys[1])
             self._server = AsyncMailServer(self.port_server, auth)
+            logger.debug(f'{self.class_name}: server has been created.')
             return True
         except Exception:
             return False
 
-    async def _send_message(self, recipient: str, content: str) -> bool:
+    async def _send_message(self, recipient: str, content: str, once_send: bool = False) -> bool:
         """Отправка сообщения к другому клиенту через сервер.
+        Пытается отправить пока не получиться или пока есть сокет.
 
         Args:
             recipient (str): Получатель.
             content (str): Контент.
+            once_send (bool): Отправка без попыток.
 
         Raises:
             zmq.ZMQError: Ошибка при отправки.
 
         Returns:
             bool: Результат.
-        """        
-        try:
-            async with self._lock_socket:
-                await self._socket.send_multipart(
-                        [recipient.encode(), content.encode()], 
-                        flags=zmq.NOBLOCK
-                    )
-            return True
-        except zmq.ZMQError:
-            return False
+        """
+        while self._is_start.is_set():
+            try:
+                async with self._lock_socket:
+                    await self._socket.send_multipart(
+                            [recipient.encode(), content.encode()], 
+                            flags=zmq.NOBLOCK
+                        )
+                return True
+            except zmq.ZMQError as e:
+                if once_send:
+                    return False
+                if 'not a socket' in str(e):
+                    return False
+                await asyncio.sleep(1)
+                continue
+            except Exception:
+                return False
     
     def _check_use_port(self) -> bool:
         """ Используется ли порт. """
@@ -371,39 +397,30 @@ class AsyncMailClient(object):
             return True
         except zmq.ZMQError:
             return False
+        except Exception:
+            return False
     
     async def _check_server(self):
-        """ Делает пинги на сервер и пересоздает сокет. """        
+        """ Делает пинги на сервер. """        
         while self._is_start.is_set():
             try:
                 current_time = int(time.time())
                 if AsyncMailServer.INTERVAL_HEARTBEAT*2 < int(current_time - self.last_ping):
-                    # пересоздание сокета будет на 10 секунде
+                    # подключение на 10 секунде
                     logger.debug(f'{self.class_name}: reconnecting to server...')
                     self._stop_message()
                     await self._clear_clients()
-                    if self._context:
-                        self._destroy_socket()
-                    if self._server:
-                        await self._server.stop()
-                        await asyncio.sleep(.1)
-                    serv = await self._create_server()
-                    if serv:
-                        logger.debug(f'{self.class_name}: server has been created.')
-                    await self._create_socket()
-                    await self._ping_server()
-                    self.last_ping = int(time.time())
+                    res = await self._connect_message()
+                    if not res:
+                        await asyncio.sleep(1)
+                        continue
                     self._server_started.set()
+                    self.last_ping = int(time.time())
                 elif AsyncMailServer.INTERVAL_HEARTBEAT < int(current_time - self.last_ping):
                     # пинг начнется на 6 секунде
-                    ping = await self._ping_server()
-                    if not ping:
-                        self._server_started.clear()
-                    else:
-                        self._server_started.set()
-            except zmq.ZMQError as e:
-                if 'not a socket' in str(e):
-                    self.last_ping = 0
+                    res = await self._ping_server()
+                    if not res:
+                        self.last_ping = 0
             except Exception as e:
                 logger.error(_("{}: Непредвиденная ошибка - <{}>.").format(self.class_name, e), exc_info=True)
             await asyncio.sleep(2)
@@ -422,6 +439,7 @@ class AsyncMailClient(object):
                     sender = sender.decode()
                     msg = msg.decode()
                     logger.debug(f'{self.class_name}: received message <{msg}> from "{sender}".')
+                    self.last_ping = int(time.time()) # если есть сообщение значит сервер пока жив
                     if sender == AsyncMailServer.SERVER_NAME:
                         await self._process_server_commands(msg)
                     else:
@@ -443,7 +461,8 @@ class AsyncMailClient(object):
         while self._is_start.is_set():
             try:
                 # Перед тем как отправлять сообщение клиент 
-                # должен быть подключен.
+                # должен быть подключен и сервер запущен.
+                await self._server_started.wait()
                 await self._client_connected.wait()
                 if not self._is_start.is_set():
                     return
@@ -481,6 +500,7 @@ class AsyncMailClient(object):
             self.last_ping = int(time.time())
         elif CommandsCode.NOTIFY_STOP_SERVER == msg_cmd.code:
             self.last_ping = 0
+            self._stop_message()
         elif CommandsCode.GET_CONNECTED_CLIENTS == msg_cmd.code:
             await self._set_clients(msg_cmd.data)
         elif CommandsCode.CONNECT_CLIENT == msg_cmd.code:
@@ -508,6 +528,7 @@ class AsyncMailClient(object):
         if sender == self.name_client:
             await self._del_client(data.recipient)
             await self._send_message(AsyncMailServer.SERVER_NAME, CommandsCode.GET_CONNECTED_CLIENTS)
+            await self._out_queue.to_queue(f'{data.recipient}-')
             return None
         if data.type == TypeMessage.REPLY:
             # реакция на автоматический ответ, что сообщение доставлено

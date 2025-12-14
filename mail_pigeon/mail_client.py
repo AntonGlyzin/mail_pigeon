@@ -63,12 +63,13 @@ class MailClient(object):
         self._waiting_mails: Dict[str, str] = {} # ключи писем для ожидающих клиентов
         self._is_start = Event()
         self._is_start.set()
-        self._server_started = Event()
+        self._server_started = Event() # если нужно пересоздать сокет
         self._server_started.clear()
-        self._client_connected = Event()
+        self._client_connected = Event() # сигнал что сервер нас добавил в участники
         self._client_connected.clear()
         self._last_ping = 0
         self._rlock = RLock()
+        self._once_start_client()
         self._client = Thread(
                 target=self._pull_message, 
                 name=self.class_name, 
@@ -110,8 +111,11 @@ class MailClient(object):
         """
             Завершение клиента.
         """
+        self._disconnect_message()
+        time.sleep(.1)
         if self._server:
             self._server.stop()
+            time.sleep(.1)
         self._is_start.clear()
         self._server_started.set()
         self._client_connected.set()
@@ -259,22 +263,28 @@ class MailClient(object):
         self._server_started.clear()
         self._client_connected.clear()
     
-    def _disconnect_message(self):
+    def _disconnect_message(self) -> bool:
         """ Отправить сообщение на сервер о завершение работы. """        
-        self._send_message(MailServer.SERVER_NAME, CommandsCode.DISCONNECT_CLIENT)
+        return self._send_message(MailServer.SERVER_NAME, CommandsCode.DISCONNECT_CLIENT, True)
     
-    def _connect_message(self):
+    def _connect_message(self) -> bool:
         """ Отправить сообщение на сервер о присоединение. """        
-        self._send_message(MailServer.SERVER_NAME, CommandsCode.CONNECT_CLIENT)
+        return self._send_message(MailServer.SERVER_NAME, CommandsCode.CONNECT_CLIENT, True)
+    
+    def _once_start_client(self):
+        """ Запуск клиента. """
+        self._create_server()
+        self._create_socket()
 
     def _create_socket(self):
         """ Создание сокета. """
         self._context = zmq.Context()
         self._socket = self._context.socket(zmq.DEALER)
         self._socket.setsockopt_string(zmq.IDENTITY, self.name_client)
-        self._socket.setsockopt(zmq.IMMEDIATE, 1) # Не буферизовать для неготовых
-        self._socket.setsockopt(zmq.SNDHWM, 100) # Ограничить буфер
-        self._socket.setsockopt(zmq.LINGER, 0) # Не ждать при закрытии
+        self._socket.setsockopt(zmq.IMMEDIATE, 1) # не буферизовать для неготовых
+        self._socket.setsockopt(zmq.SNDHWM, 1000) # ограничить буфер на отправку
+        self._socket.setsockopt(zmq.LINGER, 100) # сброс через
+        self._socket.setsockopt(zmq.SNDBUF, 65536) # системный буфер
         keys = self._generate_keys(self._cert_dir)
         if keys:
             self._socket.setsockopt(zmq.CURVE_PUBLICKEY, keys[0])
@@ -290,6 +300,9 @@ class MailClient(object):
         try:
             if self._socket:
                 self._socket.disconnect(f'tcp://{self.host_server}:{self.port_server}')
+        except Exception as e:
+            logger.debug(f'{self.class_name}: closing the socket. Error <{e}>.')
+        try:
             if self._in_poll:
                 self._in_poll.unregister(self._socket)
             self._in_poll = None
@@ -327,32 +340,43 @@ class MailClient(object):
                 keys = MailServer.generate_keys(self._cert_dir)
                 auth = Auth(keys[0], keys[1])
             self._server = MailServer(self.port_server, auth)
+            logger.debug(f'{self.class_name}: server has been created.')
             return True
         except Exception:
             return False
 
-    def _send_message(self, recipient: str, content: str) -> bool:
+    def _send_message(self, recipient: str, content: str, once_send: bool = False) -> bool:
         """Отправка сообщения к другому клиенту через сервер.
+        Пытается отправить пока не получиться или пока есть сокет.
 
         Args:
             recipient (str): Получатель.
             content (str): Контент.
+            once_send (bool): Отправка без попыток.
 
         Raises:
             zmq.ZMQError: Ошибка при отправки.
 
         Returns:
             bool: Результат.
-        """        
-        try:
-            with self._lock_socket:
-                self._socket.send_multipart(
-                        [recipient.encode(), content.encode()], 
-                        flags=zmq.NOBLOCK
-                    )
-            return True
-        except zmq.ZMQError:
-            return False
+        """
+        while self._is_start.is_set():
+            try:
+                with self._lock_socket:
+                    self._socket.send_multipart(
+                            [recipient.encode(), content.encode()], 
+                            flags=zmq.NOBLOCK
+                        )
+                return True
+            except zmq.ZMQError as e:
+                if once_send:
+                    return False
+                if 'not a socket' in str(e):
+                    return False
+                time.sleep(1)
+                continue
+            except Exception:
+                return False
     
     def _is_use_port(self) -> bool:
         """ Используется ли порт. """
@@ -377,35 +401,26 @@ class MailClient(object):
             return False
     
     def _check_server(self):
-        """ Делает пинги на сервер и пересоздает сокет. """        
+        """ Делает пинги на сервер. """        
         while self._is_start.is_set():
             try:
                 current_time = int(time.time())
                 if MailServer.INTERVAL_HEARTBEAT*2 < int(current_time - self.last_ping):
-                    # пересоздание сокета будет на 10 секунде
+                    # подключение на 10 секунде
                     logger.debug(f'{self.class_name}: reconnecting to server...')
                     self._stop_message()
                     self._clear_clients()
-                    if self._context:
-                        self._destroy_socket()
-                    if self._server:
-                        self._server.stop()
-                        time.sleep(.1)
-                    if self._create_server():
-                        logger.debug(f'{self.class_name}: server has been created.')
-                    self._create_socket()
-                    self._ping_server()
-                    self.last_ping = current_time
+                    res = self._connect_message()
+                    if not res:
+                        time.sleep(1)
+                        continue
                     self._server_started.set()
+                    self.last_ping = int(time.time())
                 elif MailServer.INTERVAL_HEARTBEAT < int(current_time - self.last_ping):
                     # пинг начнется на 6 секунде
-                    if not self._ping_server():
-                        self._server_started.clear()
-                    else:
-                        self._server_started.set()
-            except zmq.ZMQError as e:
-                if 'not a socket' in str(e):
-                    self.last_ping = 0
+                    res = self._ping_server()
+                    if not res:
+                        self.last_ping = 0
             except Exception as e:
                 logger.error(_("{}: Непредвиденная ошибка - <{}>.").format(self.class_name, e), exc_info=True)
             time.sleep(2)
@@ -424,6 +439,7 @@ class MailClient(object):
                     sender = sender.decode()
                     msg = msg.decode()
                     logger.debug(f'{self.class_name}: received message <{msg}> from "{sender}".')
+                    self.last_ping = int(time.time()) # если есть сообщение значит сервер пока жив
                     if sender == MailServer.SERVER_NAME:
                         self._process_server_commands(msg)
                     else:
@@ -445,7 +461,8 @@ class MailClient(object):
         while self._is_start.is_set():
             try:
                 # Перед тем как отправлять сообщение клиент 
-                # должен быть подключен.
+                # должен быть подключен и сервер запущен.
+                self._server_started.wait()
                 self._client_connected.wait()
                 if not self._is_start.is_set():
                     return
@@ -483,6 +500,7 @@ class MailClient(object):
             self.last_ping = int(time.time())
         elif CommandsCode.NOTIFY_STOP_SERVER == msg_cmd.code:
             self.last_ping = 0
+            self._stop_message()
         elif CommandsCode.GET_CONNECTED_CLIENTS == msg_cmd.code:
             self._set_clients(msg_cmd.data)
         elif CommandsCode.CONNECT_CLIENT == msg_cmd.code:
@@ -510,6 +528,7 @@ class MailClient(object):
         if sender == self.name_client:
             self._del_client(data.recipient)
             self._send_message(MailServer.SERVER_NAME, CommandsCode.GET_CONNECTED_CLIENTS)
+            self._out_queue.to_queue(f'{data.recipient}-')
             return None
         if data.type == TypeMessage.REPLY:
             # реакция на автоматический ответ, что сообщение доставлено

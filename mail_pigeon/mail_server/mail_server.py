@@ -40,10 +40,12 @@ class MailServer(object):
         self._context = zmq.Context()
         self._rlock_socket = RLock()
         self._socket = self._context.socket(zmq.ROUTER)
-        self._socket.setsockopt(zmq.TCP_KEEPALIVE, 1)
-        self._socket.setsockopt(zmq.IMMEDIATE, 1) # Не буферизовать для неготовых
-        self._socket.setsockopt(zmq.SNDHWM, 100) # Ограничить буфер
-        self._socket.setsockopt(zmq.LINGER, 0) # Не ждать при закрытии
+        self._socket.setsockopt(zmq.TCP_KEEPALIVE, 1) # отслеживать мертвое соединение
+        self._socket.setsockopt(zmq.TCP_KEEPALIVE_IDLE, 30) # начать проверку если нет активности
+        self._socket.setsockopt(zmq.TCP_KEEPALIVE_INTVL, 10) # повторная проверка через
+        self._socket.setsockopt(zmq.LINGER, 1000) # ждать 1 сек. при закрытии
+        self._socket.setsockopt(zmq.ROUTER_MANDATORY, 1)  # знать об отключениях
+        self._socket.setsockopt(zmq.MAXMSGSIZE, -1)  # снимаем ограничение на размер одного сообщения
         if self._auth:
             self._socket.setsockopt(zmq.CURVE_PUBLICKEY, self._auth.CURVE_PUBLICKEY)
             self._socket.setsockopt(zmq.CURVE_SECRETKEY, self._auth.CURVE_SECRETKEY)
@@ -88,6 +90,17 @@ class MailServer(object):
         """        
         with self._rlock:
             self._clients[client] = time
+    
+    def update_time_client(self, client: str, time: int):
+        """Обновления времени клиента.
+
+        Args:
+            client (str): Клиент.
+            time (int): Время добавление.
+        """
+        with self._rlock:
+            if client in self._clients:
+                self._clients[client] = time
     
     def del_client(self, client: str):
         """Удаление клиента.
@@ -145,8 +158,9 @@ class MailServer(object):
             res (Optional[bool]): Результат.
         """        
         try:
-            if not is_unknown_recipient and recipient not in self.clients_names:
-                return False
+            with self._rlock:
+                if not is_unknown_recipient and recipient not in self._clients.keys():
+                    return False
             if isinstance(recipient, str):
                 recipient = recipient.encode()
             if isinstance(sender, str):
@@ -159,15 +173,11 @@ class MailServer(object):
                     flags=zmq.NOBLOCK
                 )
             return True
-        except zmq.Again:
-            logger.error(
-                _('{}: Не удалось переадресовать сообщение. ').format(self.class_name) +
-                _('Отправитель: <{}>. Получатель: <{}>.').format(sender, recipient)
-            )
         except zmq.ZMQError as e:
-            logger.error(_("{}: ZMQ ошибка <{}> при отправки сообщения.").format(self.class_name, e))
-        except zmq.ContextTerminated:
-            logger.error(_("{}: Контекст ZMQ завершен при отправки сообщения.").format(self.class_name))
+            logger.error(
+                    _('{}: Не удалось переадресовать сообщение. ').format(self.class_name) +
+                    _('Отправитель: <{}>. Получатель: <{}>.').format(sender, recipient)
+                )
         except Exception as e:
             logger.error(_("{}: Непредвиденная ошибка - <{}>.").format(self.class_name, e), exc_info=True)
         return False
@@ -227,9 +237,11 @@ class MailServer(object):
             try:
                 current_time = int(time.time())
                 lost_clients = []
-                for client, t in self._clients.items():
-                    if self.INTERVAL_HEARTBEAT*2 < (current_time - t):
-                        lost_clients.append(client)
+                with self._rlock:
+                    for client, t in self._clients.items():
+                        # отключение клиента на 12 секунде
+                        if self.INTERVAL_HEARTBEAT*2 < (current_time - t):
+                            lost_clients.append(client)
                 for client in lost_clients:
                     code = CommandsCode.DISCONNECT_CLIENT
                     self._commands.run_command(client, code)
@@ -259,8 +271,6 @@ class MailServer(object):
                     self._close_socket()
                     continue
                 logger.error(_("{}: ZMQ ошибка <{}> в цикле обработки сообщений.").format(self.class_name, e))
-            except zmq.ContextTerminated:
-                logger.error(_("{}: Контекст ZMQ завершен при обработке сообщений.").format(self.class_name))
             except Exception as e:
                 logger.error(
                         _('{}: Ошибка в цикле обработке сообщений. ').format(self.class_name) +
@@ -285,11 +295,13 @@ class MailServer(object):
         # если нет получателя, то это команда для сервера
         if not recipient:
             return self._run_commands(sender, msg)
+        # клиент отправил сообщение - значит на этот момент он еще жив
+        self.update_time_client(sender, int(time.time()))
         # отправляем получателю
         if self.send_message(recipient, sender, msg):
             return True
         else:
-            # отправляем самомму себе
+            # отправляем обратно
             self.send_message(sender, sender, msg)
             return False
 

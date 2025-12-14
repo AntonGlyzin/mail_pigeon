@@ -131,10 +131,12 @@ class BaseQueue(ABC):
                 key (str): Ключ.
         """        
         with self._cond:
-            for sendkey in self.send_mails:
+            send_q = []
+            for sendkey in list(self._send_queue):
                 if sendkey.startswith(key):
                     self._send_queue.remove(sendkey)
-                    self._queue.append(sendkey)
+                    send_q.append(sendkey)
+            self._queue = send_q + self._queue
 
     def gen_key(self) -> str:
         """Генерация ключа для очереди.

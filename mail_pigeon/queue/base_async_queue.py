@@ -133,18 +133,19 @@ class BaseAsyncQueue(ABC):
             self._cond.notify_all()
     
     async def to_queue(self, key: str = ''):
-        """
-            Перемещает элемент снова на отправления.
-            Можно переместить все ключи по части название в key.
+        """Перемещает элемент снова на отправления в начало очереди.
+        Можно переместить все ключи по части название в key.
             
             Args:
                 key (str): Ключ.
         """        
         async with self._cond:
-            for sendkey in self.send_mails:
+            send_q = []
+            for sendkey in list(self._send_queue):
                 if sendkey.startswith(key):
                     self._send_queue.remove(sendkey)
-                    self._queue.append(sendkey)
+                    send_q.append(sendkey)
+            self._queue = send_q + self._queue
 
     async def gen_key(self) -> str:
         """Генерация ключа для очереди.
