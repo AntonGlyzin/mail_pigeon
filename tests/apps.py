@@ -14,7 +14,7 @@ from mail_pigeon.security import TypesEncryptors
 import json
 
 import logging
-mail_logger.setLevel(logging.INFO)
+mail_logger.setLevel(logging.DEBUG)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)

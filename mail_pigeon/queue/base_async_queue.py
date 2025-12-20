@@ -130,7 +130,9 @@ class BaseAsyncQueue(ABC):
             if key in self._send_queue:
                 self._send_queue.remove(key)
                 await self._remove_data(key)
-            self._cond.notify_all()
+            if key in self._queue:
+                self._queue.remove(key)
+                await self._remove_data(key)
     
     async def to_queue(self, key: str = ''):
         """Перемещает элемент снова на отправления в начало очереди.
@@ -141,11 +143,30 @@ class BaseAsyncQueue(ABC):
         """        
         async with self._cond:
             send_q = []
-            for sendkey in list(self._send_queue):
+            for sendkey in self._send_queue:
                 if sendkey.startswith(key):
-                    self._send_queue.remove(sendkey)
                     send_q.append(sendkey)
+            for i in send_q:
+                self._send_queue.remove(i)
             self._queue = send_q + self._queue
+            if send_q:
+                self._cond.notify_all()
+    
+    async  def to_wait_queue(self, key: str = ''):
+        """Перемещает элемент на ожидание в отправленные.
+        Можно переместить все ключи по части название в key.
+            
+            Args:
+                key (str): Ключ.
+        """        
+        async with self._cond:
+            send_q = []
+            for sendkey in self._queue:
+                if sendkey.startswith(key):
+                    send_q.append(sendkey)
+            for i in send_q:
+                self._queue.remove(i)
+                self._send_queue.append(i)
 
     async def gen_key(self) -> str:
         """Генерация ключа для очереди.

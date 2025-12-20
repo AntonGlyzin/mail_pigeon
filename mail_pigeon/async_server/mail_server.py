@@ -46,12 +46,16 @@ class AsyncMailServer(object):
         self._context = zmq.asyncio.Context()
         self._lock_socket = asyncio.Lock()
         self._socket = self._context.socket(zmq.ROUTER)
-        self._socket.setsockopt(zmq.TCP_KEEPALIVE, 1) # отслеживать мертвое соединение
-        self._socket.setsockopt(zmq.TCP_KEEPALIVE_IDLE, 30) # начать проверку если нет активности
-        self._socket.setsockopt(zmq.TCP_KEEPALIVE_INTVL, 10) # повторная проверка через
         self._socket.setsockopt(zmq.IMMEDIATE, 1) # не буферизовать для неготовых
-        self._socket.setsockopt(zmq.LINGER, 1000) #  при закрытии
+        self._socket.setsockopt(zmq.TCP_KEEPALIVE, 1) # отслеживать мертвое соединение
+        self._socket.setsockopt(zmq.TCP_KEEPALIVE_IDLE, 15) # сек. начать проверку если нет активности
+        self._socket.setsockopt(zmq.TCP_KEEPALIVE_INTVL, 10) # сек. повторная проверка
+        self._socket.setsockopt(zmq.TCP_KEEPALIVE_CNT, 3) # количество проверок
+        self._socket.setsockopt(zmq.HEARTBEAT_IVL, 10000) # милисек. сделать ping если нет трафика
+        self._socket.setsockopt(zmq.HEARTBEAT_TIMEOUT, 20000) # если так и нет трафика или pong, то разрыв
+        self._socket.setsockopt(zmq.LINGER, 100) # милисек. ждать при закрытии
         self._socket.setsockopt(zmq.ROUTER_MANDATORY, 1)  # знать об отключениях
+        self._socket.setsockopt(zmq.ROUTER_HANDOVER, 1) # использовать одинаковые ID для переподплючения
         self._socket.setsockopt(zmq.MAXMSGSIZE, -1)  # снимаем ограничение на размер одного сообщения
         if self._auth:
             self._socket.setsockopt(zmq.CURVE_PUBLICKEY, self._auth.CURVE_PUBLICKEY)
@@ -240,7 +244,7 @@ class AsyncMailServer(object):
                 async with self._lock:
                     for client, t in self._clients.items():
                         # отключение клиента на 12 секунде
-                        if self.INTERVAL_HEARTBEAT*3 < (current_time - t):
+                        if self.INTERVAL_HEARTBEAT*3 <= (current_time - t):
                             lost_clients.append(client)
                 for client in lost_clients:
                     code = CommandsCode.DISCONNECT_CLIENT
