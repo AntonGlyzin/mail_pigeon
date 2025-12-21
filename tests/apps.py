@@ -216,7 +216,7 @@ if __name__ == "__main__":
     if int(arg) == 3:
         t1 = time.time()
         logger.info('3. Отправка сообщений между процессами с CURVE аутентификацией.')
-        apps_cert = Path(__file__).parent / 'apps_cert'
+        apps_cert = str(Path(__file__).parent / 'apps_cert')
         proc1 = Process(target=app1, daemon=True, args=(5600, start,), kwargs={'cert_dir': apps_cert})
         proc1.start()
         time.sleep(1)
@@ -236,7 +236,7 @@ if __name__ == "__main__":
     if int(arg) == 4:
         t1 = time.time()
         logger.info('4. Отправка сообщений между процессами с CURVE аутентификацией и шифрованием сообщений.')
-        apps_cert = Path(__file__).parent / 'apps_cert'
+        apps_cert = str(Path(__file__).parent / 'apps_cert')
         encript = TypesEncryptors.HMAC('admin')
         proc1 = Process(target=app1, daemon=True, args=(5601, start, encript), kwargs={'cert_dir': apps_cert})
         proc1.start()

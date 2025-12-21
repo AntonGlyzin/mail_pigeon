@@ -33,7 +33,7 @@ class AsyncMailClient(object):
             is_master: Optional[bool] = False,
             out_queue: Optional[BaseAsyncQueue] = None,
             encryptor: Optional[IEncryptor] = None,
-            cert_dir: Optional[Path] = None
+            cert_dir: Optional[str] = None
         ):
         """
         Args:
@@ -43,7 +43,7 @@ class AsyncMailClient(object):
             is_master (Optional[bool], optional): Будет ли этот клиент сервером.
             out_queue (Optional[BaseAsyncQueue], optional): Очередь писем на отправку.
             encryptor (bool, optional): Шифрует сообщение до отправки на сервер.
-            cert_dir (Path, optional): Путь до сертификата или 
+            cert_dir (str, optional): Путь до сертификата или 
                 до пустой директории для генерации ключа.
         """        
         self.class_name = f'{self.__class__.__name__}-{self.number_client}-{name_client}'
@@ -51,7 +51,7 @@ class AsyncMailClient(object):
         self.host_server = host_server
         self.port_server = port_server
         self.is_master = is_master
-        self._cert_dir: Optional[Path] = cert_dir
+        self._cert_dir: Optional[Path] = Path(cert_dir) if cert_dir else None
         self._context: Optional[zmq.Context] = None
         self._lock_socket = Lock()
         self._socket: Optional[zmq.Socket] = None
@@ -74,14 +74,17 @@ class AsyncMailClient(object):
                 coro=self._pull_message(), 
                 name=self.class_name
             )
+        self._shield_client = asyncio.shield(self._client)
         self._sender_mails = create_task(
                 coro=self._mailer(), 
                 name=f'{self.class_name}-Mailer'
             )
+        self._shield_sender_mails = asyncio.shield(self._sender_mails)
         self._heartbeat_server = create_task(
                 coro=self._check_server(), 
                 name=f'{self.class_name}-Heartbeat-Server'
             )
+        self._shield_heartbeat_server = asyncio.shield(self._heartbeat_server)
     
     @property
     def last_ping(self):
@@ -339,7 +342,10 @@ class AsyncMailClient(object):
                 return False
             auth: Optional[Auth] = None
             if self._cert_dir:
-                k1, k2 = AsyncMailServer.generate_keys(self._cert_dir)
+                k1, k2 = await asyncio.to_thread(
+                        AsyncMailServer.generate_keys, 
+                        self._cert_dir
+                    )
                 auth = Auth(k1, k2)
             if self._server:
                 await self._server.stop()

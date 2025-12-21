@@ -16,7 +16,10 @@ class TestSimpleBox(BaseTest):
         super().setUpClass()
         cls.fb = SimpleBox()
         cls.loop = asyncio.new_event_loop()
-        cls.asyncfb = AsyncSimpleBox()
+        cls.asyncfb: AsyncSimpleBox = None
+        async def init():
+            cls.asyncfb = AsyncSimpleBox()
+        cls.loop.run_until_complete(init())
     
     @classmethod
     def tearDownClass(cls):
@@ -127,7 +130,6 @@ class TestSimpleBox(BaseTest):
     def test_case_3(self):
         logger.info('3. Запись и получение данных из одной корутины. ')
         async def main3():
-            await self.asyncfb.init()
             logger.info('----Запись значений в очередь.')
             data1 = {'id': 1, 'name': 'Leanne Graham', 'username': 'Bret', 'email': 'Sincere@april.biz', 'address': {'street': 'Kulas Light', 'suite': 'Apt. 556', 'city': 'Gwenborough', 'zipcode': '92998-3874', 'geo': {'lat': '-37.3159', 'lng': '81.1496'}}, 'phone': '1-770-736-8031 x56442', 'website': 'hildegard.org', 'company': {'name': 'Romaguera-Crona', 'catchPhrase': 'Multi-layered client-server neural-net', 'bs': 'harness real-time e-markets'}}
             key1 = await self.asyncfb.put(json.dumps(data1))
@@ -218,7 +220,6 @@ class TestSimpleBox(BaseTest):
                 await self.asyncfb.done(r[0])
         
         async def main4():
-            await self.asyncfb.init()
             tasks = [
                 asyncio.create_task(func1()),
                 asyncio.create_task(func2()),

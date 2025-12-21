@@ -11,7 +11,7 @@ import json
 import logging
 logger.setLevel(logging.INFO)
 
-name = 'app3'
+name = 'app4'
 
 start = threading.Event()
 start.set()
@@ -24,21 +24,21 @@ apps_cert = str(Path(__file__).parent.parent / 'apps_cert')
 client = MailClient(name, is_master=False, out_queue=f, cert_dir=apps_cert)
 client.wait_server()
 
-file = Path(__file__).parent.parent / 'data' / 'app3.json'
+file = Path(__file__).parent.parent / 'data' / 'app4.json'
 txt = file.read_text('utf-8')
 data = {i['id']:i for i in json.loads(txt)}
 
-print('============= App3 =================\n')
+print('============= App4 =================\n')
 while start.is_set():
     msg = client.get()
     if msg is None:
         continue
     print(f'sender - <{msg.sender}> | recipient - <{msg.recipient}>')
     print(f'---- content ----\n <{msg.content}> \n ------ \n')
-    if msg.sender == 'app2':
+    if msg.sender == 'app3':
         reciv = json.loads(msg.content)
         item = data.get(reciv['id'])
         if item is None:
             continue
-        new_data = {**reciv, **item}
-        client.send('app4', json.dumps(new_data))
+        reciv['address'].update(item)
+        client.send('app2', json.dumps(reciv))

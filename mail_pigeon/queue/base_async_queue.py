@@ -13,7 +13,8 @@ class BaseAsyncQueue(ABC):
         self._wait_queue: List[str] = [] # приходят письма, которые ожидают по ключу
         self._send_queue: List[str] = [] # отправленные или те, которые не должны отправиться
         self._cond = Condition()
-        asyncio.create_task(self._init())
+        self._init_run = asyncio.create_task(self._init())
+        self._shield_init_run = asyncio.shield(self._init_run)
 
     @property
     def queue_mails(self) ->List[str]:

@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional, List, Tuple, Literal
+from typing import Optional, List, Tuple
 from threading import Condition
 from abc import ABC, abstractmethod
 

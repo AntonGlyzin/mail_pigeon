@@ -30,7 +30,7 @@ class MailClient(object):
             is_master: Optional[bool] = False,
             out_queue: Optional[BaseQueue] = None,
             encryptor: Optional[IEncryptor] = None,
-            cert_dir: Optional[Path] = None
+            cert_dir: Optional[str] = None
         ):
         """
         Args:
@@ -48,7 +48,7 @@ class MailClient(object):
         self.host_server = host_server
         self.port_server = port_server
         self.is_master = is_master
-        self._cert_dir = cert_dir
+        self._cert_dir = Path(cert_dir) if cert_dir else None
         self._context: Optional[zmq.Context] = None
         self._lock_socket = RLock()
         self._socket: Optional[zmq.Socket] = None

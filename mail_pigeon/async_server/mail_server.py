@@ -68,10 +68,12 @@ class AsyncMailServer(object):
                 coro=self._run(), 
                 name=self.class_name
             )
+        self._shield_server = asyncio.shield(self._server)
         self._server_heartbeat = asyncio.create_task(
                 coro=self._heartbeat_clients(), 
                 name=f'{self.class_name}-Heartbeat'
             )
+        self._shield_server_heartbeat = asyncio.shield(self._server_heartbeat)
     
     async def clients(self) -> List[Tuple[str, int]]:
         async with self._lock:
@@ -303,12 +305,12 @@ class AsyncMailServer(object):
         sender = data[0].decode()
         recipient = data[1].decode()
         msg = data[2].decode()
+        # клиент отправил сообщение - значит на этот момент он еще жив
+        await self.update_time_client(sender, int(time.time()))
         # если нет получателя, то это команда для сервера
         if not recipient:
             res = await self._run_commands(sender, msg)
             return res
-        # клиент отправил сообщение - значит на этот момент он еще жив
-        await self.update_time_client(sender, int(time.time()))
         # отправляем получателю
         res = await self.send_message(recipient, sender, msg)
         if res:

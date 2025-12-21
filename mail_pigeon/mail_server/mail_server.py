@@ -298,11 +298,11 @@ class MailServer(object):
         sender = data[0].decode()
         recipient = data[1].decode()
         msg = data[2].decode()
+        # клиент отправил сообщение - значит на этот момент он еще жив
+        self.update_time_client(sender, int(time.time()))
         # если нет получателя, то это команда для сервера
         if not recipient:
             return self._run_commands(sender, msg)
-        # клиент отправил сообщение - значит на этот момент он еще жив
-        self.update_time_client(sender, int(time.time()))
         # отправляем получателю
         if self.send_message(recipient, sender, msg):
             return True
