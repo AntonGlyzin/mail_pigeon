@@ -92,7 +92,7 @@ class AsyncFilesBox(BaseAsyncQueue):
         """
         self._ext = '.q'
         self._path = folder
-        self._folder: AsyncPath = None
+        self._folder = AsyncPath(self._path)
         super().__init__()
 
     async def _init_queue(self) -> List[str]:
@@ -101,13 +101,13 @@ class AsyncFilesBox(BaseAsyncQueue):
         Returns:
             List[str]: Список.
         """
-        self._folder = await AsyncPath(self._path).absolute()
+        self._folder = await self._folder.absolute()
         exists = await self._folder.exists()
         is_dir = await self._folder.is_dir()
         if not exists:
             await self._folder.mkdir(parents=True, exist_ok=True)
         elif not is_dir:
-            raise CreateErrorFolderBox(self._folder)
+            raise CreateErrorFolderBox(str(self._folder))
         files = []
         async for file_path in self._folder.iterdir():
             if file_path.suffix != self._ext:

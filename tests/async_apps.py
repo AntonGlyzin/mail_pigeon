@@ -34,7 +34,6 @@ def app1(port, start, encryptor=None, cert_dir=None):
     async def main():
         q = AsyncPath(__file__).parent / 'queue' /'app1'
         f = AsyncFilesBox(str(q))
-        await f.init()
         client = AsyncMailClient(
                 'app1', 
                 is_master=True, 
@@ -73,7 +72,6 @@ def app2(port, start, encryptor=None, cert_dir=None):
     async def main():
         q = AsyncPath(__file__).parent / 'queue' / 'app2'
         f = AsyncFilesBox(str(q))
-        await f.init()
         client = AsyncMailClient(
                 'app2', 
                 is_master=False,

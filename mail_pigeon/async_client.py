@@ -43,7 +43,7 @@ class AsyncMailClient(object):
             is_master (Optional[bool], optional): Будет ли этот клиент сервером.
             out_queue (Optional[BaseAsyncQueue], optional): Очередь писем на отправку.
             encryptor (bool, optional): Шифрует сообщение до отправки на сервер.
-            cert_dir (str, optional): Путь до сертификата или 
+            cert_dir (Path, optional): Путь до сертификата или 
                 до пустой директории для генерации ключа.
         """        
         self.class_name = f'{self.__class__.__name__}-{self.number_client}-{name_client}'
@@ -51,13 +51,13 @@ class AsyncMailClient(object):
         self.host_server = host_server
         self.port_server = port_server
         self.is_master = is_master
-        self._cert_dir = cert_dir
-        self._context = None
+        self._cert_dir: Optional[Path] = cert_dir
+        self._context: Optional[zmq.Context] = None
         self._lock_socket = Lock()
-        self._socket = None
+        self._socket: Optional[zmq.Socket] = None
         self._in_poll = None
         self._encryptor = encryptor
-        self._server = None
+        self._server: Optional[AsyncMailServer] = None
         self._clients: List[str] = []
         self._out_queue = out_queue or AsyncSimpleBox() # очередь для отправки
         self._in_queue = AsyncSimpleBox() # очередь для принятия сообщений
@@ -115,7 +115,7 @@ class AsyncMailClient(object):
     
     async def send(
             self, recipient: str, content: str, wait: bool = False, 
-            timeout: float = None
+            timeout: Optional[float] = None
         ) -> Optional[Message]:
         """Отправляет сообщение в другой клиент.
 
@@ -156,7 +156,7 @@ class AsyncMailClient(object):
         await self._in_queue.done(res[0])
         return Message(**json.loads(res[1]))
     
-    async def get(self, timeout: float = None) -> Optional[Message]:
+    async def get(self, timeout: Optional[float] = None) -> Optional[Message]:
         """Получение сообщений из принимающей очереди. 
         Метод блокируется, если нет timeout.
 
@@ -181,23 +181,24 @@ class AsyncMailClient(object):
         self._client_connected.set()
         self._destroy_socket()
     
-    def _generate_keys(self, cert_dir: Optional[Path] = None) -> Optional[Tuple[bytes, bytes]]:
+    def _generate_keys(self, cert_dir: Path) -> Tuple[bytes, bytes]:
         """Генерирует пару ключей или выдает существующие из директории.
 
         Args:
             cert_dir (Optional[Path], optional): Путь до директории.
 
         Returns:
-            Optional[Tuple[str, str]]: Пара ключей public_key, secret_key.
-        """        
-        if not cert_dir:
-            return None
+            Tuple[str, str]: Пара ключей public_key, secret_key.
+        """
         if not cert_dir.exists():
             cert_dir.mkdir(exist_ok=True)
         cert = cert_dir / f'{self.name_client}.key_secret'
         if not cert.exists():
             zmq.auth.create_certificates(cert_dir, self.name_client)
-        return zmq.auth.load_certificate(cert)
+        k1, k2 = zmq.auth.load_certificate(cert)
+        if k2 is None:
+            return k1, b''
+        return k1, k2
     
     def _load_server_key(self) -> bytes:
         """Возвращает публичный ключ сервера.
@@ -207,7 +208,9 @@ class AsyncMailClient(object):
 
         Returns:
             (bytes): Ключ.
-        """        
+        """
+        if self._cert_dir is None:
+            return b''
         server_public = self._cert_dir / "server.key"
         if not server_public.exists():
             raise FileNotFoundError(_("Ключ сервера не найден: <{}>").format(server_public))
@@ -284,8 +287,8 @@ class AsyncMailClient(object):
         self._socket.setsockopt(zmq.HEARTBEAT_IVL, 10000) # милисек. сделать ping если нет трафика
         self._socket.setsockopt(zmq.HEARTBEAT_TIMEOUT, 20000) # если так и нет трафика или pong, то разрыв
         self._socket.setsockopt(zmq.SNDTIMEO, 1000)  # милисек. если не удается отправить сообщение EAGAIN
-        keys = await asyncio.to_thread(self._generate_keys, self._cert_dir)
-        if keys:
+        if self._cert_dir:
+            keys = await asyncio.to_thread(self._generate_keys, self._cert_dir)
             self._socket.setsockopt(zmq.CURVE_PUBLICKEY, keys[0])
             self._socket.setsockopt(zmq.CURVE_SECRETKEY, keys[1])
             serv_key = await asyncio.to_thread(self._load_server_key)
@@ -334,10 +337,10 @@ class AsyncMailClient(object):
                 return False
             if self.is_master is False:
                 return False
-            auth = None
+            auth: Optional[Auth] = None
             if self._cert_dir:
-                keys = AsyncMailServer.generate_keys(self._cert_dir)
-                auth = Auth(keys[0], keys[1])
+                k1, k2 = AsyncMailServer.generate_keys(self._cert_dir)
+                auth = Auth(k1, k2)
             if self._server:
                 await self._server.stop()
             self._server = AsyncMailServer(self.port_server, auth)
@@ -361,6 +364,8 @@ class AsyncMailClient(object):
         Returns:
             bool: Результат.
         """
+        if self._socket is None:
+            return False
         while self._is_start.is_set():
             try:
                 async with self._lock_socket:
@@ -379,6 +384,7 @@ class AsyncMailClient(object):
                 continue
             except Exception:
                 return False
+        return False
     
     def _check_use_port(self) -> bool:
         """ Используется ли порт. """
@@ -397,6 +403,8 @@ class AsyncMailClient(object):
     async def _ping_server(self) -> bool:
         """ Отправляет пинг на сервер. """
         try:
+            if self._socket is None:
+                return False
             async with self._lock_socket:
                 await self._socket.send_multipart(
                         [AsyncMailServer.SERVER_NAME.encode(), CommandsCode.PING.encode()], 
@@ -484,7 +492,7 @@ class AsyncMailClient(object):
                     continue
                 recipient, hex = res[0].split('-')
                 if recipient not in self.clients:
-                    await self._out_queue.to_wait_queue(f'{recipient}-')
+                    await self._out_queue.to_send_queue(f'{recipient}-')
                     continue
                 msg = res[1]
                 if self._encryptor:
@@ -512,7 +520,10 @@ class AsyncMailClient(object):
             await self._add_client(client)
             await self._out_queue.to_queue(f'{client}-')
         elif CommandsCode.NOTIFY_DISCONNECT_CLIENT == msg_cmd.code:
-            await self._del_client(msg_cmd.data)
+            client = msg_cmd.data
+            await self._del_client(client)
+            await self._out_queue.to_send_queue(f'{client}-')
+            await self._in_queue.del_wait_key(f'{client}-')
         elif CommandsCode.PONG == msg_cmd.code:
             self.last_ping = int(time.time())
         elif CommandsCode.NOTIFY_STOP_SERVER == msg_cmd.code:
@@ -535,7 +546,7 @@ class AsyncMailClient(object):
         """
         if self._encryptor:
             try:
-                msg = self._encryptor.decrypt(msg.encode())
+                msg = self._encryptor.decrypt(msg.encode()).decode()
             except Exception:
                 logger.error(
                     _("{}: Не удалось расшифровать сообщение от <{}>.").format(self.class_name, sender)
@@ -558,7 +569,7 @@ class AsyncMailClient(object):
                     use_get_key=data.is_response
                 )
             recipient = data.sender
-            data = Message(
+            data_msg = Message(
                     key=data.key,
                     type=TypeMessage.REPLY,
                     wait_response=False,
@@ -568,6 +579,6 @@ class AsyncMailClient(object):
                     content=''
                 ).to_bytes()
             if self._encryptor:
-                data = self._encryptor.encrypt(data)
+                data_msg = self._encryptor.encrypt(data_msg)
             # отправляем автоматический ответ на пришедшее сообщение
-            await self._send_message(recipient, data.decode())
+            await self._send_message(recipient, data_msg.decode())

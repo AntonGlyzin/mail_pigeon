@@ -1,15 +1,16 @@
 import uuid
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Literal
 from threading import Condition
 from abc import ABC, abstractmethod
 
 
 class BaseQueue(ABC):
     
-    def __init__(self):
-        self._queue: List[str] = self._init_queue() or [] # на отправления
-        self._wait_queue: List[str] = [] # ожидает по ключу
-        self._send_queue: List[str] = [] # отправленные
+    def __init__(self) -> None:
+        self._queue: List[str] = self._init_queue() or [] # на отправление
+        self._wait_keys_queue: List[str] = [] # ключи, которые могут ожитаться из разных потоков
+        self._wait_queue: List[str] = [] # приходят письма, которые ожидают по ключу
+        self._send_queue: List[str] = [] # отправленные или те, которые не должны отправиться
         self._cond = Condition()
 
     @property
@@ -59,7 +60,7 @@ class BaseQueue(ABC):
                     +len(self._wait_queue)
                     +len(self._send_queue))
 
-    def put(self, value: str, key: str = None, use_get_key: bool = False) -> str:
+    def put(self, value: str, key: Optional[str] = None, use_get_key: bool = False) -> str:
         """Помещяет значение в очередь.
 
         Args:
@@ -80,7 +81,7 @@ class BaseQueue(ABC):
             self._cond.notify_all()
         return local_key
 
-    def get(self, key: str = None, timeout: float = None) -> Optional[Tuple[str, str]]:
+    def get(self, key: Optional[str] = None, timeout: Optional[float] = None) -> Optional[Tuple[str, str]]:
         """Получает ключ и значение из очереди.
         Когда очередь пуста, то метод блокируется, если не установлен timeout.
         
@@ -100,10 +101,17 @@ class BaseQueue(ABC):
                 key = self._queue.pop(0)
                 self._send_queue.append(key)
             else:
+                self._wait_keys_queue.append(key)
                 while key not in self._wait_queue:
                     self._cond.wait(timeout=timeout)
-                    if timeout and (key not in self._wait_queue):
+                    if key not in self._wait_keys_queue:
                         return None
+                    if timeout and (key not in self._wait_queue):
+                        self._wait_keys_queue.remove(key)
+                        return None
+                self._wait_keys_queue.remove(key)
+            if key is None:
+                return None
             content = self._read_data(key)
         return key, content
 
@@ -126,10 +134,10 @@ class BaseQueue(ABC):
     
     def to_queue(self, key: str = ''):
         """Перемещает элемент снова на отправления.
-        Можно переместить все ключи по части название в key.
+        Можно переместить все ключи по части название key.
             
             Args:
-                key (str): Ключ.
+                key (str): Часть ключа.
         """        
         with self._cond:
             send_q = []
@@ -142,12 +150,12 @@ class BaseQueue(ABC):
             if send_q:
                 self._cond.notify_all()
     
-    def to_wait_queue(self, key: str = ''):
+    def to_send_queue(self, key: str = ''):
         """Перемещает элемент на ожидание в отправленные.
-        Можно переместить все ключи по части название в key.
+        Можно переместить все ключи по части название key.
             
             Args:
-                key (str): Ключ.
+                key (str): Часть ключа.
         """        
         with self._cond:
             send_q = []
@@ -157,6 +165,20 @@ class BaseQueue(ABC):
             for i in send_q:
                 self._queue.remove(i)
                 self._send_queue.append(i)
+    
+    def del_wait_key(self, key: str = ''):
+        """Удалить ключи из ожиданий, чтобы вывести потоки из блока.
+            
+            Args:
+                key (str): Часть ключа.
+        """        
+        with self._cond:
+            del_items = []
+            for k in self._wait_keys_queue:
+                if k.startswith(key):
+                    del_items.append(k)
+            for item in del_items:
+                self._wait_keys_queue.remove(item)
 
     def gen_key(self) -> str:
         """Генерация ключа для очереди.

@@ -2,7 +2,7 @@ from __future__ import annotations
 import time
 import json
 from abc import ABC, abstractmethod
-from typing import Type, Any, TYPE_CHECKING, Union
+from typing import Type, Any, TYPE_CHECKING, Union, Dict, Optional
 from dataclasses import dataclass, asdict
 from mail_pigeon.exceptions import CommandCodeNotFound
 
@@ -144,7 +144,7 @@ class PingServer(Command):
 
 class Commands(object):
     
-    CMD = {
+    CMD: Dict[str, Type[Command]] = {
         ConnectClient.code: ConnectClient, # клиент присоединяется
         ConfirmConnection.code: ConfirmConnection, # клиент подтверждает соединение
         DisconnectClient.code: DisconnectClient, # клиент отсоединяется
@@ -155,7 +155,7 @@ class Commands(object):
     def __init__(self, server: MailServer):
         self._server = server
     
-    def run_command(self, sender: str, code: str) -> Type[Command]:
+    def run_command(self, sender: str, code: str):
         """Запуск команды.
 
         Args:
@@ -165,7 +165,7 @@ class Commands(object):
         Raises:
             CommandCodeNotFound: Команда не найдена.
         """        
-        cmd: Type[Command] = self.CMD.get(code)
+        cmd: Optional[Type[Command]] = self.CMD.get(code)
         if not cmd:
             raise CommandCodeNotFound(code)
         cmd(self._server, sender).run()

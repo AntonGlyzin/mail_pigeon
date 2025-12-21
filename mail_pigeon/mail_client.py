@@ -29,7 +29,6 @@ class MailClient(object):
             port_server: int = 5555,
             is_master: Optional[bool] = False,
             out_queue: Optional[BaseQueue] = None,
-            wait_server: bool = True,
             encryptor: Optional[IEncryptor] = None,
             cert_dir: Optional[Path] = None
         ):
@@ -40,7 +39,6 @@ class MailClient(object):
             port_server (int, optional): Порт подключения. По умолчанию - 5555.
             is_master (Optional[bool], optional): Будет ли этот клиент сервером.
             out_queue (Optional[BaseQueue], optional): Очередь писем на отправку.
-            wait_server (bool, optional): Стоит ли ждать включения сервера.
             encryptor (bool, optional): Шифрует сообщение до отправки на сервер.
             cert_dir (str, optional): Путь до сертификата или 
                 до пустой директории для генерации ключа.
@@ -51,12 +49,12 @@ class MailClient(object):
         self.port_server = port_server
         self.is_master = is_master
         self._cert_dir = cert_dir
-        self._context = None
+        self._context: Optional[zmq.Context] = None
         self._lock_socket = RLock()
-        self._socket = None
+        self._socket: Optional[zmq.Socket] = None
         self._in_poll = None
         self._encryptor = encryptor
-        self._server = None
+        self._server: Optional[MailServer] = None
         self._clients: List[str] = []
         self._out_queue = out_queue or SimpleBox() # очередь для отправки
         self._in_queue = SimpleBox() # очередь для принятия сообщений
@@ -87,8 +85,6 @@ class MailClient(object):
                 daemon=True
             )
         self._heartbeat_server.start()
-        if wait_server:
-            self.wait_server()
     
     @property
     def last_ping(self):
@@ -121,8 +117,8 @@ class MailClient(object):
         self._destroy_socket()
     
     def send(
-            self, recipient: str, 
-            content: str, wait: bool = False, timeout: float = None
+            self, recipient: str, content: str, 
+            wait: bool = False, timeout: Optional[float] = None
         ) -> Optional[Message]:
         """Отправляет сообщение в другой клиент.
 
@@ -162,7 +158,7 @@ class MailClient(object):
         self._in_queue.done(res[0])
         return Message(**json.loads(res[1]))
     
-    def get(self, timeout: float = None) -> Optional[Message]:
+    def get(self, timeout: Optional[float] = None) -> Optional[Message]:
         """Получение сообщений из принимающей очереди. 
         Метод блокируется, если нет timeout.
 
@@ -187,23 +183,24 @@ class MailClient(object):
         self._client_connected.set()
         self._destroy_socket()
     
-    def _generate_keys(self, cert_dir: Optional[Path] = None) -> Optional[Tuple[bytes, bytes]]:
+    def _generate_keys(self, cert_dir: Path) -> Tuple[bytes, bytes]:
         """Генерирует пару ключей или выдает существующие из директории.
 
         Args:
             cert_dir (Optional[Path], optional): Путь до директории.
 
         Returns:
-            Optional[Tuple[str, str]]: Пара ключей public_key, secret_key.
-        """        
-        if not cert_dir:
-            return None
+            Tuple[bytes, bytes]: Пара ключей public_key, secret_key.
+        """
         if not cert_dir.exists():
             cert_dir.mkdir(exist_ok=True)
         cert = cert_dir / f'{self.name_client}.key_secret'
         if not cert.exists():
             zmq.auth.create_certificates(cert_dir, self.name_client)
-        return zmq.auth.load_certificate(cert)
+        k1, k2 = zmq.auth.load_certificate(cert)
+        if k2 is None:
+            return k1, b''
+        return k1, k2
     
     def _load_server_key(self) -> bytes:
         """Возвращает публичный ключ сервера.
@@ -213,7 +210,9 @@ class MailClient(object):
 
         Returns:
             (bytes): Ключ.
-        """        
+        """
+        if self._cert_dir is None:
+            return b''   
         server_public = self._cert_dir / "server.key"
         if not server_public.exists():
             raise FileNotFoundError(_("Ключ сервера не найден: <{}>").format(server_public))
@@ -288,8 +287,8 @@ class MailClient(object):
         self._socket.setsockopt(zmq.HEARTBEAT_IVL, 10000) # милисек. сделать ping если нет трафика
         self._socket.setsockopt(zmq.HEARTBEAT_TIMEOUT, 20000) # если так и нет трафика или pong, то разрыв
         self._socket.setsockopt(zmq.SNDTIMEO, 1000)  # милисек. если не удается отправить сообщение EAGAIN
-        keys = self._generate_keys(self._cert_dir)
-        if keys:
+        if self._cert_dir:
+            keys = self._generate_keys(self._cert_dir)
             self._socket.setsockopt(zmq.CURVE_PUBLICKEY, keys[0])
             self._socket.setsockopt(zmq.CURVE_SECRETKEY, keys[1])
             serv_key = self._load_server_key()
@@ -338,10 +337,10 @@ class MailClient(object):
                 return False
             if self.is_master is False:
                 return False
-            auth = None
+            auth: Optional[Auth] = None
             if self._cert_dir:
-                keys = MailServer.generate_keys(self._cert_dir)
-                auth = Auth(keys[0], keys[1])
+                k1, k2 = MailServer.generate_keys(self._cert_dir)
+                auth = Auth(k1, k2)
             if self._server:
                 self._server.stop()
             self._server = MailServer(self.port_server, auth)
@@ -365,6 +364,8 @@ class MailClient(object):
         Returns:
             bool: Результат.
         """
+        if self._socket is None:
+            return False
         while self._is_start.is_set():
             try:
                 with self._lock_socket:
@@ -383,6 +384,7 @@ class MailClient(object):
                 continue
             except Exception:
                 return False
+        return False
     
     def _is_use_port(self) -> bool:
         """ Используется ли порт. """
@@ -397,6 +399,8 @@ class MailClient(object):
     def _ping_server(self) -> bool:
         """ Отправляет пинг на сервер. """        
         try:
+            if self._socket is None:
+                return False
             with self._lock_socket:
                 self._socket.send_multipart(
                         [MailServer.SERVER_NAME.encode(), CommandsCode.PING.encode()], 
@@ -482,7 +486,7 @@ class MailClient(object):
                     continue
                 recipient, hex = res[0].split('-')
                 if recipient not in self.clients:
-                    self._out_queue.to_wait_queue(f'{recipient}-')
+                    self._out_queue.to_send_queue(f'{recipient}-')
                     continue
                 msg = res[1]
                 if self._encryptor:
@@ -510,7 +514,10 @@ class MailClient(object):
             self._add_client(client)
             self._out_queue.to_queue(f'{client}-')
         elif CommandsCode.NOTIFY_DISCONNECT_CLIENT == msg_cmd.code:
-            self._del_client(msg_cmd.data)
+            client = msg_cmd.data
+            self._del_client(client)
+            self._out_queue.to_send_queue(f'{client}-')
+            self._in_queue.del_wait_key(f'{client}-')
         elif CommandsCode.PONG == msg_cmd.code:
             self.last_ping = int(time.time())
         elif CommandsCode.NOTIFY_STOP_SERVER == msg_cmd.code:
@@ -533,7 +540,7 @@ class MailClient(object):
         """
         if self._encryptor:
             try:
-                msg = self._encryptor.decrypt(msg.encode())
+                msg = self._encryptor.decrypt(msg.encode()).decode()
             except Exception:
                 logger.error(
                     _("{}: Не удалось расшифровать сообщение от <{}>.").format(self.class_name, sender)
@@ -556,7 +563,7 @@ class MailClient(object):
                     use_get_key=data.is_response
                 )
             recipient = data.sender
-            data = Message(
+            data_msg = Message(
                     key=data.key,
                     type=TypeMessage.REPLY,
                     wait_response=False,
@@ -566,6 +573,6 @@ class MailClient(object):
                     content=''
                 ).to_bytes()
             if self._encryptor:
-                data = self._encryptor.encrypt(data)
+                data_msg = self._encryptor.encrypt(data_msg)
             # отправляем автоматический ответ на пришедшее сообщение
-            self._send_message(recipient, data.decode())
+            self._send_message(recipient, data_msg.decode())

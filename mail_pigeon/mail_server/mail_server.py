@@ -29,7 +29,7 @@ class MailServer(object):
         self.class_name = self.__class__.__name__
         self._auth = auth
         self._clients: Dict[str, int] = {} # уже подключенные для получения сообщений
-        self._clients_wait_connect = [] # ожидающие подключения
+        self._clients_wait_connect: List[str] = [] # ожидающие подключения
         self._port = port
         self._commands = Commands(self)
         self._is_start = Event()
@@ -72,9 +72,9 @@ class MailServer(object):
         self._server_heartbeat.start()
     
     @property
-    def clients(self) -> Dict[str, int]:
+    def clients(self) -> List[Tuple[str, int]]:
         with self._rlock:
-            return tuple(self._clients.items())
+            return list(self._clients.items())
 
     @property
     def clients_names(self) -> List[str]:
@@ -191,23 +191,24 @@ class MailServer(object):
         self._close_socket()
     
     @classmethod
-    def generate_keys(cls, cert_dir: Optional[Path] = None) -> Optional[Tuple[bytes, bytes]]:
+    def generate_keys(cls, cert_dir: Path) -> Tuple[bytes, bytes]:
         """Генерирует пару ключей или выдает существующие из директории.
 
         Args:
-            cert_dir (Optional[Path], optional): Путь до директории.
+            cert_dir (Path): Путь до директории.
 
         Returns:
-            Optional[Tuple[str, str]]: Пара ключей public_key, secret_key.
-        """        
-        if not cert_dir:
-            return None
+            Tuple[bytes, bytes]: Пара ключей public_key, secret_key.
+        """
         if not cert_dir.exists():
             cert_dir.mkdir(exist_ok=True)
         cert = cert_dir / 'server.key_secret'
         if not cert.exists():
             zmq.auth.create_certificates(cert_dir, 'server')
-        return zmq.auth.load_certificate(cert)
+        k1, k2 = zmq.auth.load_certificate(cert)
+        if k2 is None:
+            return k1, b''
+        return k1, k2
     
     def _close_socket(self):
         """ Закрытие сокета. """        

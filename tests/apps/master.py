@@ -14,7 +14,7 @@ name = 'master'
 
 q = Path(__file__).parent / name
 f = FilesBox(str(q))
-client = MailClient(name, is_master=True, wait_server=True, out_queue=f)
+client = MailClient(name, is_master=True, out_queue=f)
 
 print('=============Server master=================')
 while True:

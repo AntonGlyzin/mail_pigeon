@@ -35,12 +35,12 @@ def app1(port, start, encryptor=None, cert_dir=None):
     client = MailClient(
             'app1',
             is_master=True, 
-            wait_server=True, 
             out_queue=f, 
             encryptor=encryptor, 
             port_server=port,
             cert_dir=cert_dir
         )
+    client.wait_server()
     file = Path(__file__).parent / 'data' / 'app1.json'
     txt = file.read_text('utf-8')
     data = json.loads(txt)
@@ -71,12 +71,12 @@ def app2(port, start, encryptor=None, cert_dir=None):
     client = MailClient(
             'app2', 
             is_master=False, 
-            wait_server=True, 
             out_queue=f, 
             encryptor=encryptor, 
             port_server=port,
             cert_dir=cert_dir
         )
+    client.wait_server()
     file = Path(__file__).parent / 'data' / 'app2.json'
     txt = file.read_text('utf-8')
     data = {}
@@ -95,11 +95,11 @@ def app3(port, start, encryptor=None, cert_dir=None):
     client = MailClient(
             'app3', 
             is_master=False, 
-            wait_server=True, 
             encryptor=encryptor,
             port_server=port,
             cert_dir=cert_dir
         )
+    client.wait_server()
     file = Path(__file__).parent / 'data' / 'app3.json'
     txt = file.read_text('utf-8')
     data = {}
@@ -119,11 +119,11 @@ def app4(port, start, encryptor=None, cert_dir=None):
     client = MailClient(
             'app4', 
             is_master=False, 
-            wait_server=True, 
             encryptor=encryptor, 
             port_server=port,
             cert_dir=cert_dir
         )
+    client.wait_server()
     file = Path(__file__).parent / 'data' / 'app4.json'
     txt = file.read_text('utf-8')
     data = {}

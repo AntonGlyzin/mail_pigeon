@@ -14,8 +14,8 @@ logger = logging.getLogger('mail_pigeon')
 
 @dataclass
 class Auth:
-    CURVE_PUBLICKEY: str
-    CURVE_SECRETKEY: str
+    CURVE_PUBLICKEY: bytes
+    CURVE_SECRETKEY: bytes
 
 
 class TypeMessage(object):

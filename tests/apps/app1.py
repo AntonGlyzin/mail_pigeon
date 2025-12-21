@@ -13,7 +13,7 @@ print(f'Client: {name}')
 
 q = Path(__file__).parent / name
 f = FilesBox(str(q))
-client = MailClient(name, is_master=False, wait_server=True, out_queue=f)
+client = MailClient(name, is_master=False, out_queue=f)
 msg = f'This is {name}'
 
 while True:

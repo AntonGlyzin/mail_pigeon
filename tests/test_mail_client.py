@@ -30,7 +30,8 @@ class TestMailClient(BaseTest):
         logger.info('1.1. Иницилизация клиентов.')
         q = Path(__file__).parent / 'queue'
         f = FilesBox(str(q))
-        client1 = MailClient('client1', is_master=True, wait_server=True, out_queue=f)
+        client1 = MailClient('client1', is_master=True, out_queue=f)
+        client1.wait_server()
         time.sleep(1)
         p=client1._is_use_port()
         self.assertTrue(p)
@@ -82,7 +83,6 @@ class TestMailClient(BaseTest):
             logger.info('2.2. Иницилизация асинхронного клиента.')
             q = Path(__file__).parent / 'async_queue'
             f = AsyncFilesBox(str(q))
-            await f.init()
             client1 = AsyncMailClient('client1', is_master=True, out_queue=f, port_server=5566)
             await client1.wait_server()
             await asyncio.sleep(1)
