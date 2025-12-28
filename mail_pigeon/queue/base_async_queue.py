@@ -203,6 +203,8 @@ class BaseAsyncQueue(ABC):
                     del_items.append(k)
             for item in del_items:
                 self._wait_keys_queue.remove(item)
+            if del_items:
+                self._cond.notify_all()
 
     async def gen_key(self) -> str:
         """Генерация ключа для очереди.

@@ -391,6 +391,7 @@ class MailClient(object):
                 if not self._server_started.is_set():
                     logger.debug(f'{self.class_name}: reconnecting to server...')
                     self._clear_clients()
+                    self._in_queue.del_wait_key()
                     self._destroy_socket()
                     time.sleep(1)
                     self._once_start_client()
@@ -438,7 +439,7 @@ class MailClient(object):
                     )
     
     def _mailer(self):
-        """ Отправка сообщений из очереди. """        
+        """ Отправка сообщений из очереди. """
         while self._is_start.is_set():
             try:
                 # Перед тем как отправлять сообщение клиент 
@@ -517,6 +518,7 @@ class MailClient(object):
             # на ожидание
             self._out_queue.put_waiting_queue(f'{data.recipient}-{data.key}')
             self._out_queue.to_waiting_queue(f'{data.recipient}-')
+            self._in_queue.del_wait_key(f'{data.recipient}-')
             self._send_message(MailServer.SERVER_NAME, CommandsCode.GET_CONNECTED_CLIENTS)
             return None
         if data.type == TypeMessage.REPLY:

@@ -398,6 +398,7 @@ class AsyncMailClient(object):
                 if not self._server_started.is_set():
                     logger.debug(f'{self.class_name}: reconnecting to server...')
                     await self._clear_clients()
+                    await self._in_queue.del_wait_key()
                     self._destroy_socket()
                     await asyncio.sleep(1)
                     await self._once_start_client()
@@ -445,7 +446,7 @@ class AsyncMailClient(object):
                     )
     
     async def _mailer(self):
-        """ Отправка сообщений из очереди. """        
+        """ Отправка сообщений из очереди. """
         while self._is_start.is_set():
             try:
                 # Перед тем как отправлять сообщение клиент 
@@ -523,6 +524,7 @@ class AsyncMailClient(object):
             # на ожидание
             await self._out_queue.put_waiting_queue(f'{data.recipient}-{data.key}')
             await self._out_queue.to_waiting_queue(f'{data.recipient}-')
+            await self._in_queue.del_wait_key(f'{data.recipient}-')
             await self._send_message(AsyncMailServer.SERVER_NAME, CommandsCode.GET_CONNECTED_CLIENTS)
             return None
         if data.type == TypeMessage.REPLY:
