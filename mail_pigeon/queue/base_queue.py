@@ -9,8 +9,9 @@ class BaseQueue(ABC):
     def __init__(self) -> None:
         self._queue: List[str] = self._init_queue() or [] # на отправление
         self._wait_keys_queue: List[str] = [] # ключи, которые могут ожитаться из разных потоков
-        self._wait_queue: List[str] = [] # приходят письма, которые ожидают по ключу
-        self._send_queue: List[str] = [] # отправленные или те, которые не должны отправиться
+        self._wait_queue: List[str] = [] # приходят письма, которые ожидаются по ключу
+        self._send_queue: List[str] = [] # отправленные
+        self._send_waiting_queue: List[str] = [] # которые невозможно сейчас отправить
         self._cond = Condition()
 
     @property
@@ -32,6 +33,15 @@ class BaseQueue(ABC):
         return list(self._wait_queue)
     
     @property
+    def send_waiting_queue(self) ->List[str]:
+        """Исходящие ожидающие сообщения на отправления.
+
+        Returns:
+            List[str]: Список ключей.
+        """
+        return list(self._send_waiting_queue)
+    
+    @property
     def send_mails(self) ->List[str]:
         """Отправленые сообщения, но не подтвержденные.
 
@@ -43,7 +53,8 @@ class BaseQueue(ABC):
     def clear(self):
         """ Очищение файловой очереди. """        
         with self._cond:
-            for key in self._queue+self._wait_queue+self._send_queue:
+            for key in (self._queue + self._wait_queue + 
+                        self._send_queue + self._send_waiting_queue):
                 self._remove_data(key)
             self._queue.clear()
             self._wait_queue.clear()
@@ -57,8 +68,9 @@ class BaseQueue(ABC):
         """        
         with self._cond:
             return (len(self._queue)
-                    +len(self._wait_queue)
-                    +len(self._send_queue))
+                    + len(self._wait_queue)
+                    + len(self._send_queue)
+                    + len(self._send_waiting_queue))
 
     def put(self, value: str, key: Optional[str] = None, use_get_key: bool = False) -> str:
         """Помещяет значение в очередь.
@@ -66,7 +78,7 @@ class BaseQueue(ABC):
         Args:
             value (str): Значение в очередь.
             key (str): Помещает значение в очередь под этим ключом.
-            use_get_key (bool): Элемент будет добавлен в ожидающую очередь по ключу `.get(key)`. 
+            use_get_key (bool): Элемент будет добавлен в ожидающую очередь по ключу для входящих.
 
         Returns:
             str: Ключ значения.
@@ -86,7 +98,7 @@ class BaseQueue(ABC):
         Когда очередь пуста, то метод блокируется, если не установлен timeout.
         
         Args:
-            key (str, optional): Ждать значение по ключу.
+            key (str, optional): Ждать значение по ключу из входящих сообщений.
             timeout (float, optional): Сколько в секундах ждать результата.
 
         Returns:
@@ -101,15 +113,9 @@ class BaseQueue(ABC):
                 key = self._queue.pop(0)
                 self._send_queue.append(key)
             else:
-                self._wait_keys_queue.append(key)
-                while key not in self._wait_queue:
-                    self._cond.wait(timeout=timeout)
-                    if key not in self._wait_keys_queue:
-                        return None
-                    if timeout and (key not in self._wait_queue):
-                        self._wait_keys_queue.remove(key)
-                        return None
-                self._wait_keys_queue.remove(key)
+                key = self._wait_key(key, timeout)
+                if not key:
+                    return None
             if key is None:
                 return None
             content = self._read_data(key)
@@ -128,12 +134,9 @@ class BaseQueue(ABC):
             if key in self._send_queue:
                 self._send_queue.remove(key)
                 self._remove_data(key)
-            if key in self._queue:
-                self._queue.remove(key)
-                self._remove_data(key)
     
     def to_queue(self, key: str = ''):
-        """Перемещает элемент снова на отправления.
+        """Перемещает элемент снова на отправления из исходящих ожиданий.
         Можно переместить все ключи по части название key.
             
             Args:
@@ -141,17 +144,17 @@ class BaseQueue(ABC):
         """        
         with self._cond:
             send_q = []
-            for sendkey in self._send_queue:
+            for sendkey in self._send_waiting_queue:
                 if sendkey.startswith(key):
                     send_q.append(sendkey)
             for i in send_q:
-                self._send_queue.remove(i)
+                self._send_waiting_queue.remove(i)
             self._queue = send_q + self._queue
             if send_q:
                 self._cond.notify_all()
     
-    def to_send_queue(self, key: str = ''):
-        """Перемещает элемент на ожидание в отправленные.
+    def to_waiting_queue(self, key: str = ''):
+        """Перемещает элемент на ожидание для исходящих из очереди на отправления.
         Можно переместить все ключи по части название key.
             
             Args:
@@ -164,10 +167,25 @@ class BaseQueue(ABC):
                     send_q.append(sendkey)
             for i in send_q:
                 self._queue.remove(i)
-                self._send_queue.append(i)
+                self._send_waiting_queue.append(i)
+    
+    def put_waiting_queue(self, key: str, index: Optional[int] = None):
+        """Помещает элемент из отправленных на ожидание для исходящих.
+            
+            Args:
+                key (str): Ключа.
+                index (str): Индекс.
+        """        
+        with self._cond:
+            if key in self._send_queue:
+                self._send_queue.remove(key)
+            if index is not None:
+                self._send_waiting_queue.insert(index, key)
+            else:
+                self._send_waiting_queue.append(key)
     
     def del_wait_key(self, key: str = ''):
-        """Удалить ключи из ожиданий, чтобы вывести потоки из блока.
+        """Удалить ключи из входящих ожиданий, чтобы вывести потоки из блока.
             
             Args:
                 key (str): Часть ключа.
@@ -204,6 +222,28 @@ class BaseQueue(ABC):
             if new_name in self._send_queue:
                 continue
             return new_name
+    
+    def _wait_key(self, key: str, timeout: Optional[float] = None) -> Optional[str]:
+        """Ожидает письмо по ключу для входящих.
+        
+        Args:
+            key (str): Ключ.
+            timeout (float, optional): Сколько в секундах ждать результата.
+
+        Returns:
+            Optional[str]: Ключ.
+        """
+        with self._cond:
+            self._wait_keys_queue.append(key)
+            while key not in self._wait_queue:
+                self._cond.wait(timeout=timeout)
+                if key not in self._wait_keys_queue:
+                    return None
+                if timeout and (key not in self._wait_queue):
+                    self._wait_keys_queue.remove(key)
+                    return None
+            self._wait_keys_queue.remove(key)
+            return key
 
     @abstractmethod
     def _init_queue(self) -> List[str]:

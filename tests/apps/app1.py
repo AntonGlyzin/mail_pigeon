@@ -9,7 +9,7 @@ from threading import Event
 import json
 
 import logging
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 name = 'app1'
 

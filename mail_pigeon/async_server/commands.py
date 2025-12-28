@@ -1,5 +1,4 @@
 from __future__ import annotations
-import time
 from typing import Type, TYPE_CHECKING, Optional, Dict
 from abc import ABC, abstractmethod
 from mail_pigeon.exceptions import CommandCodeNotFound
@@ -31,30 +30,11 @@ class ConnectClient(Command):
             Добавляет клиента в список ожидающих 
             пока он не подтвердит свое присутствие.
         """
-        await self.server.add_wait_client(self.client)
+        await self.server.add_client(self.client)
         # отдать подключаемому клиенту список участников
-        names = await self.server.clients_names()
+        names = await self.server.clients()
         data = MessageCommand(self.code, names).to_bytes()
-        await self.server.send_message(self.client, self.server.SERVER_NAME, data, True)
-
-
-class ConfirmConnection(Command):
-    """
-        Подтверждение подключения от клиента.
-    """    
-    
-    code = CommandsCode.CONFIRM_CONNECT
-    
-    async def run(self):
-        """
-            Подтверждение от клиента, что он присоединился.
-            Посылаем оповещение другим клиентам.
-        """
-        await self.server.del_wait_client(self.client)
-        await self.server.add_client(self.client,  int(time.time()))
-        data = MessageCommand(CommandsCode.CONFIRM_CONNECT).to_bytes()
         await self.server.send_message(self.client, self.server.SERVER_NAME, data)
-        names = await self.server.clients_names()
         for client in names:
             if client == self.client:
                 continue
@@ -73,9 +53,8 @@ class DisconnectClient(Command):
         """
             Удаляет клиента из списка и посылает уведомление другим участникам.
         """
-        await self.server.del_wait_client(self.client)
         await self.server.del_client(self.client)
-        names = await self.server.clients_names()
+        names = await self.server.clients()
         for client in names:
             if client == self.client:
                 continue
@@ -94,7 +73,7 @@ class GetConnectedClients(Command):
         """
             Отправляет подключеному клиенту список участников.
         """
-        names = await self.server.clients_names()
+        names = await self.server.clients()
         data = MessageCommand(self.code, names).to_bytes()
         await self.server.send_message(self.client, self.server.SERVER_NAME, data)
 
@@ -110,22 +89,18 @@ class PingServer(Command):
         """
             Обработка сигнала от клиента что он еще жив.
         """
-        names = await self.server.clients_names()
-        for client in names:
-            if client == self.client:
-                await self.server.add_client(client, int(time.time()))
+        names = await self.server.clients()
         if self.client not in names:
             connect = ConnectClient(self.server, self.client)
             await connect.run()
         data = MessageCommand(CommandsCode.PONG).to_bytes()
-        await self.server.send_message(self.client, self.server.SERVER_NAME, data, True)
+        await self.server.send_message(self.client, self.server.SERVER_NAME, data)
 
 
 class Commands(object):
     
     CMD: Dict[str, Type[Command]] = {
         ConnectClient.code: ConnectClient, # клиент присоединяется
-        ConfirmConnection.code: ConfirmConnection, # клиент подтверждает соединение
         DisconnectClient.code: DisconnectClient, # клиент отсоединяется
         GetConnectedClients.code: GetConnectedClients, # клиент запрашивает список участников
         PingServer.code: PingServer # ping от клиента для сервера

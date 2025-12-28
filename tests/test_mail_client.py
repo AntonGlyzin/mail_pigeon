@@ -8,7 +8,7 @@ from threading import Thread
 import json
 
 import logging
-mail_logger.setLevel(logging.DEBUG)
+mail_logger.setLevel(logging.INFO)
 
 
 class TestMailClient(BaseTest):
@@ -75,6 +75,9 @@ class TestMailClient(BaseTest):
         client2.send('client3', json.dumps(data1))
         time.sleep(.1)
         th_client3.join()
+        # client1.stop()
+        # client2.stop()
+        # client3.stop()
         logger.info('1.7. Завершение.')
         logger.info("-------------------------------------------------------")
         

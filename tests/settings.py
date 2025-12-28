@@ -17,7 +17,7 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 logger.addHandler(console_handler)
 
 # Логгер в файл
-file_handler = logging.FileHandler(tests_dir / 'unit_tests.log', mode='w', encoding='utf8')
+file_handler = logging.FileHandler(tests_dir / 'unit_tests.log', mode='a', encoding='utf8')
 file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
 logger.addHandler(file_handler)
 

@@ -4,7 +4,7 @@ import zmq.asyncio
 import asyncio
 import sys
 import time
-from typing import List, Optional, Dict, Union, Tuple
+from typing import List, Optional, Union, Tuple
 from pathlib import Path
 import uuid
 from mail_pigeon.exceptions import CommandCodeNotFound
@@ -34,8 +34,7 @@ class AsyncMailServer(object):
         self.server_id = uuid.uuid4().hex
         self.class_name = self.__class__.__name__
         self._auth = auth
-        self._clients: Dict[str, int] = {} # уже подключенные для получения сообщений
-        self._clients_wait_connect: List[str] = [] # ожидающие подключения
+        self._clients: List[str] = [] # уже подключенные для получения сообщений
         self._port = port
         self._commands = Commands(self)
         self._is_start = asyncio.Event()
@@ -46,14 +45,13 @@ class AsyncMailServer(object):
         self._context = zmq.asyncio.Context()
         self._lock_socket = asyncio.Lock()
         self._socket = self._context.socket(zmq.ROUTER)
-        self._socket.setsockopt(zmq.IMMEDIATE, 1) # не буферизовать для неготовых
         self._socket.setsockopt(zmq.TCP_KEEPALIVE, 1) # отслеживать мертвое соединение
         self._socket.setsockopt(zmq.TCP_KEEPALIVE_IDLE, 15) # сек. начать проверку если нет активности
         self._socket.setsockopt(zmq.TCP_KEEPALIVE_INTVL, 10) # сек. повторная проверка
         self._socket.setsockopt(zmq.TCP_KEEPALIVE_CNT, 3) # количество проверок
         self._socket.setsockopt(zmq.HEARTBEAT_IVL, 10000) # милисек. сделать ping если нет трафика
         self._socket.setsockopt(zmq.HEARTBEAT_TIMEOUT, 20000) # если так и нет трафика или pong, то разрыв
-        self._socket.setsockopt(zmq.LINGER, 100) # милисек. ждать при закрытии
+        self._socket.setsockopt(zmq.LINGER, 1000) # милисек. ждать при закрытии
         self._socket.setsockopt(zmq.ROUTER_MANDATORY, 1)  # знать об отключениях
         self._socket.setsockopt(zmq.ROUTER_HANDOVER, 1) # использовать одинаковые ID для переподплючения
         self._socket.setsockopt(zmq.MAXMSGSIZE, -1)  # снимаем ограничение на размер одного сообщения
@@ -75,18 +73,23 @@ class AsyncMailServer(object):
             )
         self._shield_server_heartbeat = asyncio.shield(self._server_heartbeat)
     
-    async def clients(self) -> List[Tuple[str, int]]:
+    async def clients(self) -> List[str]:
         async with self._lock:
-            return list(self._clients.items())
-
-    async def clients_names(self) -> List[str]:
-        async with self._lock:
-            return list(self._clients.keys())
-
-    async def clients_wait_connect(self) -> List[str]:
-        return list(self._clients_wait_connect)
+            return list(self._clients)
     
-    async def add_client(self, client: str, time: int):
+    async def check_client(self, client: str) -> bool:
+        """Есть ли такой клиент в подключенном списке.
+
+        Args:
+            client (str): Клиент.
+        """        
+        async with self._lock:
+            if client not in self._clients:
+                return False
+            else:
+                return True
+    
+    async def add_client(self, client: str):
         """Добавление клиента для связи.
 
         Args:
@@ -94,18 +97,8 @@ class AsyncMailServer(object):
             time (int): Время добавление.
         """        
         async with self._lock:
-            self._clients[client] = time
-    
-    async def update_time_client(self, client: str, time: int):
-        """Обновления времени клиента.
-
-        Args:
-            client (str): Клиент.
-            time (int): Время добавление.
-        """
-        async with self._lock:
-            if client in self._clients:
-                self._clients[client] = time
+            if client not in self._clients:
+                self._clients.append(client)
     
     async def del_client(self, client: str):
         """Удаление клиента.
@@ -115,42 +108,19 @@ class AsyncMailServer(object):
         """        
         async with self._lock:
             if client in self._clients:
-                self._clients.pop(client)
-    
-    async def add_wait_client(self, client: str):
-        """Добавление клиента в комнату ожиданий.
-
-        Args:
-            client (str): Клиент.
-        """        
-        async with self._lock:
-            if client not in self._clients_wait_connect:
-                self._clients_wait_connect.append(client)
-    
-    async def del_wait_client(self, client: str):
-        """Удаление клиента из комнаты ожиданий.
-
-        Args:
-            client (str): Клиент.
-        """        
-        async with self._lock:
-            if client in self._clients_wait_connect:
-                self._clients_wait_connect.remove(client)
+                self._clients.remove(client)
 
     async def stop(self):
-        """
-            Завершение работы сервера.
-        """
-        names = await self.clients_names()
+        """ Завершение работы сервера. """
+        names = await self.clients()
         for client in names:
             data = MessageCommand(CommandsCode.NOTIFY_STOP_SERVER).to_bytes()
             await self.send_message(client, self.SERVER_NAME, data)
-        await asyncio.sleep(.1)
         self._close_socket()
 
     async def send_message(
-            self, recipient: Union[str, bytes], sender: Union[str, bytes], 
-            msg: Union[str, bytes], is_unknown_recipient: bool = False
+            self, recipient: Union[str, bytes], 
+            sender: Union[str, bytes], msg: Union[str, bytes]
         ) -> Optional[bool]:
         """Отправить сообщение получателю, если он есть в списке на сервере.
 
@@ -158,21 +128,17 @@ class AsyncMailServer(object):
             recipient (str): Получатель.
             sender (str): Отправитель.
             msg (str): Сообщение.
-            is_unknown_recipient (bool, optional): Неизвестный получатель.
 
         Returns:
             res (Optional[bool]): Результат.
-        """        
+        """
+        if isinstance(recipient, str):
+            recipient = recipient.encode()
+        if isinstance(sender, str):
+            sender = sender.encode()
+        if isinstance(msg, str):
+            msg = msg.encode()
         try:
-            async with self._lock:
-                if not is_unknown_recipient and recipient not in self._clients.keys():
-                    return False
-            if isinstance(recipient, str):
-                recipient = recipient.encode()
-            if isinstance(sender, str):
-                sender = sender.encode()
-            if isinstance(msg, str):
-                msg = msg.encode()
             async with self._lock_socket:
                 await self._socket.send_multipart(
                     [recipient, sender, msg], 
@@ -180,9 +146,21 @@ class AsyncMailServer(object):
                 )
             return True
         except zmq.ZMQError as e:
+            # закрыт сокет сервера
+            if e.errno == zmq.ENOTSOCK:
+                return False
+            # если такого клиента нет или он закрыл соединение
+            if e.errno == zmq.EHOSTUNREACH:
+                logger.debug('{}: client <{}> does not exist.'.format(self.class_name, recipient.decode()))
+                return None
+            # достигнут максимум для исходящих сообщений
+            if e.errno == zmq.EAGAIN:
+                logger.debug('{}: maximum for outgoing messages has been reached.'.format(self.class_name))
+                return False
             logger.error(
                     _('{}: Не удалось переадресовать сообщение. ').format(self.class_name) +
-                    _('Отправитель: <{}>. Получатель: <{}>.').format(sender, recipient)
+                    _('Отправитель: <{}>. Получатель: <{}>.').format(sender or self.class_name, recipient) + ' ' +
+                    _('Контекст ошибки: <{}>. ').format(e), 
                 )
         except Exception as e:
             logger.error(_("{}: Непредвиденная ошибка - <{}>.").format(self.class_name, e), exc_info=True)
@@ -216,54 +194,44 @@ class AsyncMailServer(object):
         self._is_start.clear()
         self._heartbeat.clear()
         self._clients.clear()
-        self._clients_wait_connect.clear()
         try:
             if self._poll_in:
                 self._poll_in.unregister(self._socket)
-            self._poll_in = None
         except Exception as e:
-            logger.debug(f'{self.class_name}: closing the socket. Error <{e}>.')
+            logger.debug(f'{self.class_name}: closing the socket. <{e}>.')
         try:
             if self._socket:
                 self._socket.close()
-            self._socket = None
         except Exception as e:
-            logger.debug(f'{self.class_name}: closing the socket. Error <{e}>.')
+            logger.debug(f'{self.class_name}: closing the socket. <{e}>.')
         try:
             if self._context:
                 self._context.term()
-            self._context = None
         except Exception as e:
-            logger.debug(f'{self.class_name}: destroy the socket. Error <{e}>.')
+            logger.debug(f'{self.class_name}: destroy the socket. <{e}>.')
     
     async def _heartbeat_clients(self):
-        """В случае просроченного понга от клиента, 
-        удаляет его из списка и поссылает другим участникам о его уходе.
-        """        
+        """ Проверка подключения клиента. """        
         while self._heartbeat.is_set():
             try:
-                current_time = int(time.time())
-                lost_clients = []
-                async with self._lock:
-                    for client, t in self._clients.items():
-                        # отключение клиента на 12 секунде
-                        if self.INTERVAL_HEARTBEAT*3 <= (current_time - t):
-                            lost_clients.append(client)
-                for client in lost_clients:
-                    code = CommandsCode.DISCONNECT_CLIENT
-                    await self._commands.run_command(client, code)
-            except asyncio.CancelledError:
-                logger.debug(f'{self.class_name}: cancelled error is <._heartbeat_clients> method.')
-                break
+                names = await self.clients()
+                for client in names:
+                    data = MessageCommand(CommandsCode.ECHO).to_bytes()
+                    res = await self.send_message(client, self.SERVER_NAME, data)
+                    if res is None:
+                        code = CommandsCode.DISCONNECT_CLIENT
+                        await self._commands.run_command(client, code)
             except zmq.ZMQError as e:
-                if str(e) == 'not a socket':
+                # закрыт сокет
+                if e.errno == zmq.ENOTSOCK:
                     self._close_socket()
+                    continue
             except Exception as e:
                 logger.error(
                         _("{}: Непредвиденная ошибка <{}> в мониторинге.").format(self.class_name, str(e)), 
                         exc_info=True
                     )
-            await asyncio.sleep(2)
+            await asyncio.sleep(self.INTERVAL_HEARTBEAT)
 
     async def _run(self):
         """ Главный цикл получения сообщений. """
@@ -276,11 +244,9 @@ class AsyncMailServer(object):
                         continue
                     logger.debug(f'{self.class_name}: received message <{data}>.')
                     await self._message_processing(data)
-            except asyncio.CancelledError:
-                logger.debug(f'{self.class_name}: cancelled error is <._run> method.')
-                break
             except zmq.ZMQError as e:
-                if str(e) == 'not a socket':
+                # закрыт сокет
+                if e.errno == zmq.ENOTSOCK:
                     self._close_socket()
                     continue
                 logger.error(_("{}: ZMQ ошибка <{}> в цикле обработки сообщений.").format(self.class_name, e))
@@ -305,15 +271,16 @@ class AsyncMailServer(object):
         sender = data[0].decode()
         recipient = data[1].decode()
         msg = data[2].decode()
-        # клиент отправил сообщение - значит на этот момент он еще жив
-        await self.update_time_client(sender, int(time.time()))
         # если нет получателя, то это команда для сервера
         if not recipient:
-            res = await self._run_commands(sender, msg)
-            return res
-        # отправляем получателю
-        res = await self.send_message(recipient, sender, msg)
+            return await self._run_commands(sender, msg)
+        res = await self.check_client(recipient)
         if res:
+            # отправляем получателю
+            send_res = await self.send_message(recipient, sender, msg)
+            if send_res is None:
+                code = CommandsCode.DISCONNECT_CLIENT
+                await self._commands.run_command(recipient, code)
             return True
         else:
             # отправляем обратно

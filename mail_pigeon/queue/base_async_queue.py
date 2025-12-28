@@ -10,8 +10,9 @@ class BaseAsyncQueue(ABC):
     def __init__(self) -> None:
         self._queue: List[str] = [] # на отправление
         self._wait_keys_queue: List[str] = [] # ключи, которые могут ожитаться из разных потоков
-        self._wait_queue: List[str] = [] # приходят письма, которые ожидают по ключу
-        self._send_queue: List[str] = [] # отправленные или те, которые не должны отправиться
+        self._wait_queue: List[str] = [] # приходят письма, которые ожидаются по ключу
+        self._send_queue: List[str] = [] # отправленные
+        self._send_waiting_queue: List[str] = [] # которые невозможно сейчас отправить
         self._cond = Condition()
         self._init_run = asyncio.create_task(self._init())
         self._shield_init_run = asyncio.shield(self._init_run)
@@ -27,12 +28,21 @@ class BaseAsyncQueue(ABC):
     
     @property
     def wait_mails(self) ->List[str]:
-        """Ожидающие сообщения по ключу.
+        """Входящие ожидающие сообщения по ключу.
 
         Returns:
             List[str]: Список ключей.
         """
         return list(self._wait_queue)
+    
+    @property
+    def send_waiting_queue(self) ->List[str]:
+        """Исходящие ожидающие сообщения на отправления.
+
+        Returns:
+            List[str]: Список ключей.
+        """
+        return list(self._send_waiting_queue)
     
     @property
     def send_mails(self) ->List[str]:
@@ -46,7 +56,8 @@ class BaseAsyncQueue(ABC):
     async def clear(self):
         """ Очищение файловой очереди. """        
         async with self._cond:
-            for key in self._queue+self._wait_queue+self._send_queue:
+            for key in (self._queue + self._wait_queue + 
+                        self._send_queue + self._send_waiting_queue):
                 await self._remove_data(key)
             self._queue.clear()
             self._wait_queue.clear()
@@ -60,8 +71,9 @@ class BaseAsyncQueue(ABC):
         """        
         async with self._cond:
             return (len(self._queue)
-                    +len(self._wait_queue)
-                    +len(self._send_queue))
+                    + len(self._wait_queue)
+                    + len(self._send_queue)
+                    + len(self._send_waiting_queue))
 
     async def put(self, value: str, key: Optional[str] = None, use_get_key: bool = False) -> str:
         """Помещяет значение в очередь.
@@ -69,7 +81,7 @@ class BaseAsyncQueue(ABC):
         Args:
             value (str): Значение в очередь.
             key (str): Помещает значение в очередь под этим ключом.
-            use_get_key (bool): Элемент будет добавлен в ожидающую очередь по ключу `.get(key)`. 
+            use_get_key (bool): Элемент будет добавлен в ожидающую очередь по ключу `.get(key)` для входящих.
 
         Returns:
             str: Ключ значения.
@@ -89,7 +101,7 @@ class BaseAsyncQueue(ABC):
         Когда очередь пуста, то метод блокируется, если не установлен timeout.
         
         Args:
-            key (str, optional): Ждать значение по ключу.
+            key (str, optional): Ждать значение по ключу из входящих сообщений.
             timeout (float, optional): Сколько в секундах ждать результата.
 
         Returns:
@@ -107,18 +119,9 @@ class BaseAsyncQueue(ABC):
                 key = self._queue.pop(0)
                 self._send_queue.append(key)
             else:
-                self._wait_keys_queue.append(key)
-                while key not in self._wait_queue:
-                    try:
-                        await asyncio.wait_for(self._cond.wait(), timeout=timeout)
-                    except asyncio.TimeoutError:
-                        pass
-                    if key not in self._wait_keys_queue:
-                        return None
-                    if timeout and (key not in self._wait_queue):
-                        self._wait_keys_queue.remove(key)
-                        return None
-                self._wait_keys_queue.remove(key)
+                res = await self.__wait_key(key, timeout)
+                if not res:
+                    return None
             if key is None:
                 return None
             content = await self._read_data(key)
@@ -137,12 +140,9 @@ class BaseAsyncQueue(ABC):
             if key in self._send_queue:
                 self._send_queue.remove(key)
                 await self._remove_data(key)
-            if key in self._queue:
-                self._queue.remove(key)
-                await self._remove_data(key)
     
     async def to_queue(self, key: str = ''):
-        """Перемещает элемент снова на отправления в начало очереди.
+        """Перемещает элемент снова на отправления из исходящих ожиданий.
         Можно переместить все ключи по части название key.
             
             Args:
@@ -150,17 +150,17 @@ class BaseAsyncQueue(ABC):
         """        
         async with self._cond:
             send_q = []
-            for sendkey in self._send_queue:
+            for sendkey in self._send_waiting_queue:
                 if sendkey.startswith(key):
                     send_q.append(sendkey)
             for i in send_q:
-                self._send_queue.remove(i)
+                self._send_waiting_queue.remove(i)
             self._queue = send_q + self._queue
             if send_q:
                 self._cond.notify_all()
     
-    async  def to_send_queue(self, key: str = ''):
-        """Перемещает элемент на ожидание в отправленные.
+    async def to_waiting_queue(self, key: str = ''):
+        """Перемещает элементы на ожидание для исходящих из очереди на отправления.
         Можно переместить все ключи по части название key.
             
             Args:
@@ -173,10 +173,25 @@ class BaseAsyncQueue(ABC):
                     send_q.append(sendkey)
             for i in send_q:
                 self._queue.remove(i)
-                self._send_queue.append(i)
+                self._send_waiting_queue.append(i)
+    
+    async def put_waiting_queue(self, key: str, index: Optional[int] = None):
+        """Помещает элемент на ожидание для исходящих из очереди на отправления.
+            
+            Args:
+                key (str): Ключа.
+                index (str): Индекс.
+        """        
+        async with self._cond:
+            if key in self._send_queue:
+                self._send_queue.remove(key)
+            if index is not None:
+                self._send_waiting_queue.insert(index, key)
+            else:
+                self._send_waiting_queue.append(key)
     
     async def del_wait_key(self, key: str = ''):
-        """Удалить ключи из ожиданий, чтобы вывести потоки из блока.
+        """Удалить ключи из входящих ожиданий, чтобы вывести потоки из блока.
             
             Args:
                 key (str): Часть ключа.
@@ -218,6 +233,30 @@ class BaseAsyncQueue(ABC):
         """ Инициализация очереди при создание экземпляра. """
         async with self._cond:
             self._queue = await self._init_queue()
+    
+    async def __wait_key(self, key: str, timeout: Optional[float] = None) -> Optional[str]:
+        """Ожидает письмо по ключу для входящих.
+        
+        Args:
+            key (str): Ключ.
+            timeout (float, optional): Сколько в секундах ждать результата.
+
+        Returns:
+            Optional[str]: Ключ.
+        """
+        self._wait_keys_queue.append(key)
+        while key not in self._wait_queue:
+            try:
+                await asyncio.wait_for(self._cond.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                pass
+            if key not in self._wait_keys_queue:
+                return None
+            if timeout and (key not in self._wait_queue):
+                self._wait_keys_queue.remove(key)
+                return None
+        self._wait_keys_queue.remove(key)
+        return key
 
     @abstractmethod
     async def _init_queue(self) -> List[str]:
