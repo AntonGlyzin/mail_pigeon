@@ -4,6 +4,7 @@ path = Path(__file__)
 tests_dir = path.parent
 sys.path.insert(0, str(tests_dir.parent.parent))
 from mail_pigeon import AsyncMailClient, logger
+from mail_pigeon.security import TypesEncryptors
 from mail_pigeon.queue import AsyncFilesBox
 import asyncio
 import json
@@ -22,8 +23,8 @@ async def main():
     q = Path(__file__).parent / 'queue' / name
     f = AsyncFilesBox(str(q))
     apps_cert = str(Path(__file__).parent.parent / 'apps_cert')
-    
-    client = AsyncMailClient(name, is_master=False, out_queue=f, cert_dir=apps_cert)
+    cipher = TypesEncryptors.HMAC('qwe34')
+    client = AsyncMailClient(name, is_master=False, out_queue=f, cert_dir=apps_cert, encryptor=cipher)
     await client.wait_server()
     
     file = Path(__file__).parent.parent / 'data' / 'app2.json'

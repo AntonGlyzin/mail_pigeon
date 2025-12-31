@@ -123,6 +123,8 @@ class MailClient(object):
             key = self._waiting_mails[recipient]
             is_response = True
         key = key or self._out_queue.gen_key()
+        if self._encryptor:
+            content = self._encryptor.encrypt(content.encode()).decode()
         data = Message(
                 key = key, 
                 type = TypeMessage.REQUEST,
@@ -142,7 +144,18 @@ class MailClient(object):
             self._out_queue.done(f'{recipient}-{key}')
             return None
         self._in_queue.done(res[0])
-        return Message(**json.loads(res[1]))
+        data = Message(**json.loads(res[1]))
+        if self._encryptor:
+            try:
+                data.content = self._encryptor.decrypt(data.content.encode()).decode()
+            except Exception:
+                logger.error(
+                    _("{}: Не удалось расшифровать сообщение от <{}>.").format(self.class_name, data.sender)
+                )
+                return None
+        if data.wait_response:
+            self._waiting_mails[data.sender] = data.key
+        return data
     
     def get(self, timeout: Optional[float] = None) -> Optional[Message]:
         """Получение сообщений из принимающей очереди. 
@@ -159,6 +172,14 @@ class MailClient(object):
             return None
         self._in_queue.done(res[0])
         msg = Message(**json.loads(res[1]))
+        if self._encryptor:
+            try:
+                msg.content = self._encryptor.decrypt(msg.content.encode()).decode()
+            except Exception:
+                logger.error(
+                    _("{}: Не удалось расшифровать сообщение от <{}>.").format(self.class_name, msg.sender)
+                )
+                return None
         if msg.wait_response:
             self._waiting_mails[msg.sender] = msg.key
         return msg
@@ -347,28 +368,23 @@ class MailClient(object):
         """
         if self._socket is None:
             return False
-        while self._is_start.is_set():
-            try:
-                with self._lock_socket:
-                    self._socket.send_multipart(
-                            [recipient.encode(), content.encode()], 
-                            flags=zmq.NOBLOCK
-                        )
-                return True
-            except zmq.ZMQError as e:
-                # закрыт сокет
-                if e.errno == zmq.ENOTSOCK:
-                    self._stop_message()
-                    return False
-                # сервер закрыл соединение или переполнен исходящий буфер
-                if e.errno == zmq.EAGAIN:
-                    self._stop_message()
-                    return False
-                time.sleep(1)
-                continue
-            except Exception:
-                return False
-        return False
+        try:
+            with self._lock_socket:
+                self._socket.send_multipart(
+                        [recipient.encode(), content.encode()], 
+                        flags=zmq.NOBLOCK
+                    )
+            return True
+        except zmq.ZMQError as e:
+            # закрыт сокет
+            if e.errno == zmq.ENOTSOCK:
+                self._stop_message()
+            # сервер закрыл соединение или переполнен исходящий буфер
+            if e.errno == zmq.EAGAIN:
+                self._stop_message()
+            return False
+        except Exception:
+            return False
     
     def _is_use_port(self) -> bool:
         """ Используется ли порт. """
@@ -459,9 +475,6 @@ class MailClient(object):
                     self._out_queue.to_waiting_queue(f'{recipient}-')
                     continue
                 msg = res[1]
-                if self._encryptor:
-                    msg = self._encryptor.encrypt(msg.encode())
-                    msg = msg.decode()
                 res = self._send_message(recipient, msg)
                 if not res:
                     self._out_queue.put_waiting_queue(res[0])
@@ -503,14 +516,6 @@ class MailClient(object):
         Args:
             msg (bytes): Сообщение.
         """
-        if self._encryptor:
-            try:
-                msg = self._encryptor.decrypt(msg.encode()).decode()
-            except Exception:
-                logger.error(
-                    _("{}: Не удалось расшифровать сообщение от <{}>.").format(self.class_name, sender)
-                )
-                return None
         data = Message.parse(msg)
         # если сообщение не достигло противоположного клиента
         if sender == self.name_client:
@@ -541,7 +546,5 @@ class MailClient(object):
                     recipient=recipient,
                     content=''
                 ).to_bytes()
-            if self._encryptor:
-                data_msg = self._encryptor.encrypt(data_msg)
             # отправляем автоматический ответ на пришедшее сообщение
             self._send_message(recipient, data_msg.decode())
