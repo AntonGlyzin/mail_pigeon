@@ -225,6 +225,18 @@ class MailClient(object):
         key, none = zmq.auth.load_certificate(server_public)
         return key
     
+    def _check_client(self, client: str) -> bool:
+        """Есть ли такой клиент в подключенном списке.
+
+        Args:
+            client (str): Клиент.
+        """        
+        with self._rlock:
+            if client not in self._clients:
+                return False
+            else:
+                return True
+    
     def _add_client(self, client: str):
         """Добавление клиента в список.
 
@@ -465,10 +477,7 @@ class MailClient(object):
                 if not res:
                     continue
                 recipient, key = res[0].split('-')
-                exist_client = True
-                with self._rlock:
-                    if recipient not in self._clients:
-                        exist_client = False
+                exist_client = self._check_client(recipient)
                 if not exist_client:
                     # на ожидание
                     self._out_queue.put_waiting_queue(res[0])

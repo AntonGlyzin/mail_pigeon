@@ -225,6 +225,18 @@ class AsyncMailClient(object):
         key, none = zmq.auth.load_certificate(server_public)
         return key
     
+    async def _check_client(self, client: str) -> bool:
+        """Есть ли такой клиент в подключенном списке.
+
+        Args:
+            client (str): Клиент.
+        """        
+        async with self._lock:
+            if client not in self._clients:
+                return False
+            else:
+                return True
+    
     async def _add_client(self, client: str):
         """Добавление клиента в список.
 
@@ -472,10 +484,7 @@ class AsyncMailClient(object):
                 if not res:
                     continue
                 recipient, key = res[0].split('-')
-                exist_client = True
-                async with self._lock:
-                    if recipient not in self._clients:
-                        exist_client = False
+                exist_client = await self._check_client(recipient)
                 if not exist_client:
                     await self._out_queue.put_waiting_queue(res[0])
                     await self._out_queue.to_waiting_queue(f'{recipient}-')
